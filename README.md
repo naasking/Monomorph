@@ -7,6 +7,7 @@ List(Str)                       →  ListǀStrǀ
 eq(Str)                         →  eqǀStrǀ
 contains(Matrix(int))           →  containsǀMatrixǀintǀǀ
 List(Matrix(int))               →  ListǀMatrixǀintǀǀ
+Pair(Str, int)                  →  PairǀStrꞏintǀ
 ```
 
 ## Example
@@ -27,7 +28,7 @@ The pieces below build a list and a matrix, an `eq` method, a `filter` that depe
 /* Type constructors */
 #define List(T)         TYPE(List, T)
 #define Matrix(T)       TYPE(Matrix, T)
-#define Pair(T0, T1)  TYPE(Pair, T0, T1)        /* PairǀT0ꞏT1ǀ */
+#define Pair(T0, T1)    TYPE(Pair, T0, T1)      /* PairǀT0ꞏT1ǀ */
 
 /* Overloaded methods */
 #define eq(T)           OVERLOAD(eq, T)         /* bool    (T, T)         */
