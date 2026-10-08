@@ -5,7 +5,7 @@ Header-only C11 macros that mimic high-level abstractions through monomorphisati
 ```
 List(Str)                       →  ListǀStrǀ
 eq(Str)                         →  eqǀStrǀ
-contains(Matrix, int)           →  containsǀMatrixꞏintǀ
+contains(Matrix(int))           →  containsǀMatrixǀintǀǀ
 List(Matrix(int))               →  ListǀMatrixǀintǀǀ
 ```
 
@@ -27,13 +27,14 @@ The pieces below build a list and a matrix, an `eq` method, a `filter` that depe
 /* Type constructors */
 #define List(T)         TYPE(List, T)
 #define Matrix(T)       TYPE(Matrix, T)
+#define Pair(T0, T1)  TYPE(Pair, T0, T1)        /* PairǀT0ꞏT1ǀ */
 
 /* Overloaded methods */
-#define eq(T)           OVERLOAD(eq, T)            /* bool    (T, T)         */
-#define len(F, T)       OVERLOAD(len, F, T)        /* size_t  (F(T))         */
-#define at(F, T)        OVERLOAD(at, F, T)         /* T       (F(T), size_t) */
-#define filter(T)       OVERLOAD(filter, T)        /* List(T) (List(T), T)   */
-#define contains(F, T)  OVERLOAD(contains, F, T)   /* bool    (F(T), T)      */
+#define eq(T)           OVERLOAD(eq, T)         /* bool    (T, T)         */
+#define len(T)          OVERLOAD(len, T)        /* size_t  (T)            */
+#define at(T)           OVERLOAD(at, T)         /* T'      (T, size_t)    */
+#define filter(T)       OVERLOAD(filter, T)     /* List(T) (List(T), T)   */
+#define contains(T)     OVERLOAD(contains, T)   /* bool    (T, T')        */
 ```
 
 ### Implementing instances
@@ -48,10 +49,10 @@ Implementations are written once against a type parameter `T` and stamped out pe
 
 typedef struct List(T) { T *items; size_t n; } List(T);
 
-static inline size_t len(List, T)(List(T) xs) {
+static inline size_t len(List(T))(List(T) xs) {
   return xs.n;
 }
-static inline T      at(List, T)(List(T) xs, size_t i) {
+static inline T at(List(T))(List(T) xs, size_t i) {
   return xs.items[i];
 }
 
@@ -75,11 +76,11 @@ static inline List(T) filter(T)(List(T) xs, T x) {
 
 typedef struct Matrix(T) { T data[4]; } Matrix(T);
 
-static inline size_t len(Matrix, T)(Matrix(T) m) {
+static inline size_t len(Matrix(T))(Matrix(T) m) {
   (void)m;
   return 4;
 }
-static inline T at(Matrix, T)(Matrix(T) m, size_t i) {
+static inline T at(Matrix(T))(Matrix(T) m, size_t i) {
   return m.data[i];
 }
 
@@ -88,18 +89,18 @@ static inline T at(Matrix, T)(Matrix(T) m, size_t i) {
 
 ### Type-constructor polymorphism
 
-An implementation can also be parameterised over a type constructor `F`, not just a type. `F(T)` applies it, and it appears by name in mangled identifiers such as `containsǀListꞏStrǀ`. `contains` works for any container that provides `len(F, T)` and `at(F, T)`:
+An implementation can also be parameterised over a type constructor `F`, not just a type. `F(T)` applies it, and it appears by name in mangled identifiers such as `containsǀListǀStrǀǀ`. `contains` works for any container that provides `len(F(T))` and `at(F(T))`:
 
 ```c
 /* contains_impl.h: instantiate with #define F <type constructor> and
-   #define T <type>. Requires len(F, T), at(F, T) and eq(T). */
+   #define T <type>. Requires len(F(T)), at(F(T)) and eq(T). */
 #if !defined(F) || !defined(T)
 #  error "contains_impl.h: define F and T before including"
 #endif
 
-static inline bool contains(F, T)(F(T) xs, T x) {
-    for (size_t i = 0; i < len(F, T)(xs); i++)
-        if (eq(T)(at(F, T)(xs, i), x))
+static inline bool contains(F(T))(F(T) xs, T x) {
+    for (size_t i = 0; i < len(F(T))(xs); i++)
+        if (eq(T)(at(F(T))(xs, i), x))
             return true;
     return false;
 }
@@ -148,24 +149,24 @@ int main(void) {
     List(Str) ys = filter(Str)(xs, "the");
     Matrix(int) m = {{ 1, 2, 3, 4 }};
 
-    printf("%zu\n", len(List, Str)(ys));             /* 4 */
-    printf("%d\n", contains(List, Str)(ys, "cat"));  /* 1 */
-    printf("%d\n", contains(List, Str)(ys, "the"));  /* 0 */
-    printf("%d\n", contains(Matrix, int)(m, 3));     /* 1 */
+    printf("%zu\n", len(List(Str))(ys));             /* 4 */
+    printf("%d\n", contains(List(Str))(ys, "cat"));  /* 1 */
+    printf("%d\n", contains(List(Str))(ys, "the"));  /* 0 */
+    printf("%d\n", contains(Matrix(int))(m, 3));     /* 1 */
 
     free(ys.items);
     return 0;
 }
 ```
 
-Each call names its instance, so dispatch happens in the preprocessor: `contains(Matrix, int)(m, 3)` is a direct call to `containsǀMatrixꞏintǀ`. Using a method with no instance for a type fails at compile time. Instantiating `list_impl.h` for a `Point` type with no `eq(Point)`:
+Each call names its instance, so dispatch happens in the preprocessor: `contains(Matrix(int))(m, 3)` is a direct call to `containsǀMatrixǀintǀǀ`. Using a method with no instance for a type fails at compile time. Instantiating `list_impl.h` for a `Point` type with no `eq(Point)`:
 
 ```
 list_impl.h: In function ‘filterǀPointǀ’:
 prelude.h:12:34: error: implicit declaration of function ‘eqǀPointǀ’; did you mean ‘filterǀPointǀ’? [-Werror=implicit-function-declaration]
    ...
-list_impl.h:15:14: note: in expansion of macro ‘eq’
-   15 |         if (!eq(T)(xs.items[i], x))
+list_impl.h:19:14: note: in expansion of macro ‘eq’
+   19 |         if (!eq(T)(xs.items[i], x))
 ```
 
 This is an error by default from GCC 14. On older versions, compile with `-Werror=implicit-function-declaration`.
@@ -187,8 +188,8 @@ Both are Unicode letters, so mangled names are ordinary C identifiers. Neither a
 
 ## Limitations
 
-- **Type arguments must be a single token:** a typedef name or a one-word type such as `int`. `unsigned int`, `float *`, and `struct foo` can't be pasted, so typedef them first, as with `Str` above.
-- **Don't use macros as type arguments.** Arguments are expanded before mangling, so if a type name is a macro in one file and a typedef in another, the two files produce different names and won't link.
+- **Type arguments must expand to a single token:** a typedef name or a one-word type such as `int`. `unsigned int`, `float *`, and `struct foo` can't be pasted, so typedef them first, as with `Str` above.
+- **Don't reuse macro names in typedefs.** Arguments are expanded before mangling, so if a type name is a macro in one file and a typedef in another, the two files produce different names and won't link.
 - **1 to 8 type parameters.** Passing 9 to 16 produces a name containing `MONOMORPH_ERROR_more_than_8_type_parameters`. Zero is not diagnosed: `TYPE(List)` yields `Listǀǀ`.
 - **Instantiate each type once per translation unit.** Including an implementation twice for the same parameters redefines its types. Non-`static` functions must be instantiated once per program, so split those implementations into a declarations header and a definitions file compiled once.
 - **Locale.** GCC prints these names as-is only under a UTF-8 locale. Under `LANG=C` it prints escapes like `\U000001c0`, so set `LANG=C.UTF-8` in CI.
