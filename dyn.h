@@ -401,12 +401,13 @@
 
 #define DYN_UNPAREN(...)  __VA_ARGS__
 
-/* `return` unless R is void. */
+/* `return` unless R is void. The () only invokes DYN_IS_VOID_void when
+   nothing follows `void`, so `void *` is not void. */
 #define DYN_RETURN(R)     MONOMORPH_CAT(DYN_RETURN_, DYN_IS_VOID(R))
 #define DYN_RETURN_0      return
 #define DYN_RETURN_1
-#define DYN_IS_VOID(R)    DYN_SECOND(MONOMORPH_CAT(DYN_IS_VOID_, R))
-#define DYN_IS_VOID_void          ~, 1
+#define DYN_IS_VOID(R)    DYN_SECOND(MONOMORPH_CAT(DYN_IS_VOID_, R) ())
+#define DYN_IS_VOID_void()        ~, 1
 #define DYN_SECOND(...)           DYN_SECOND_(__VA_ARGS__, 0, ~)
 #define DYN_SECOND_(a, b, ...)    b
 
