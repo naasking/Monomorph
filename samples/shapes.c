@@ -11,11 +11,11 @@ typedef double Dbl;
 #define scale(T)      OVERLOAD(scale, T)
 #define describe(T)   OVERLOAD(describe, T)
 
-/* An interface. */
-#define Shape_METHODS     \
-    (Dbl,  area),         \
-    (Dbl,  perimeter),    \
-    (void, scale, Dbl)
+/* An interface: its methods' names and signatures. */
+#define Shape_METHODS                   \
+    METHOD(area,      Dbl  FARGS()),    \
+    METHOD(perimeter, Dbl  FARGS()),    \
+    METHOD(scale,     void FARGS(Dbl))
 INTERFACE(Shape);
 
 /* Two types that know nothing about Shape. */
@@ -49,7 +49,7 @@ IMPL(Shape, Circle);
 IMPL(Shape, Rect);
 
 /* A second interface, added later, reusing an existing method. */
-#define Sized_METHODS  (Dbl, area)
+#define Sized_METHODS  METHOD(area, Dbl FARGS())
 INTERFACE(Sized);
 IMPL(Sized, Rect);
 

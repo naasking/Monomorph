@@ -12,9 +12,9 @@
  *   #define area(T)   OVERLOAD(area, T)
  *   #define scale(T)  OVERLOAD(scale, T)
  *
- *   #define Shape_METHODS     \         (result, name, params...)
- *       (Dbl,  area),         \
- *       (void, scale, Dbl)
+ *   #define Shape_METHODS                                                    \
+ *       METHOD(area,  Dbl  FARGS()),                                         \
+ *       METHOD(scale, void FARGS(Dbl))
  *   INTERFACE(Shape);                       declares Dyn(Shape)
  *
  *   Dbl area(Circle)(const Circle *self) { return PI * self->r * self->r; }
@@ -42,8 +42,47 @@
 /* -------------------------------------------------------------------------- */
 
 /*
- * INTERFACE(I);   with I##_METHODS defined as a list of method signatures,
- *                 (R, name, A1, ..., An), not counting self.
+ * METHOD(name, R FARGS(A1, ..., An))
+ *
+ *   A method named name taking A1, ..., An after self and returning R,
+ *   written the way the method itself is defined:
+ *
+ *     void scale(Circle)(Circle *self, Dbl k)       the method
+ *     METHOD(scale, void FARGS(Dbl))                its signature
+ *
+ *   FARGS() or FARGS(void) for none. Other macros can build or pass on a
+ *   signature freely. One not of this form is reported as
+ *   DYN_ERROR_signature_must_be_written_R_FARGS, and one with no result
+ *   type as DYN_ERROR_FARGS_needs_a_result_type_before_it. fn.h writes
+ *   closure types the same way, Fn(R FARGS(A1, ..., An)).
+ */
+#define METHOD(name, ...)  DYN_METHOD_(name, __VA_ARGS__, DYN_NO_FARGS_, ~)
+#define FARGS(...)         , DYN_FARGS_(__VA_ARGS__)
+
+/* FARGS leaves the marker DYN_FARGS_(...) after the result. METHOD checks
+   that it is there with a result before it, and makes the signature into
+   the tuple (name, R, A1, ..., An) the generators read. */
+#define DYN_METHOD_(name, r, m, ...)                                          \
+    DYN_METHOD_I_(name, r, DYN_FARGS_CHECK_ ## m)
+#define DYN_METHOD_I_(name, r, ...)                                           \
+    DYN_METHOD_J_(name, r, __VA_ARGS__, DYN_METHOD_BAD_, (), ~)
+#define DYN_METHOD_J_(name, r, marker, kind, params, ...)                     \
+    kind(name, r, params)
+#define DYN_FARGS_CHECK_DYN_FARGS_(...)                                       \
+    ~, DYN_METHOD_OK_,                                                        \
+    (MONOMORPH_CAT(DYN_FARGS_LIST_, DYN_NO_ARGS(__VA_ARGS__))(__VA_ARGS__))
+#define DYN_FARGS_LIST_0(...)  , __VA_ARGS__
+#define DYN_FARGS_LIST_1(...)
+#define DYN_METHOD_OK_(name, r, params)                                       \
+    MONOMORPH_CAT(DYN_METHOD_RESULT_, DYN_IS_EMPTY(r))(name, r, params)
+#define DYN_METHOD_RESULT_0(name, r, params)  (name, r DYN_UNPAREN params)
+#define DYN_METHOD_RESULT_1(name, r, params)                                  \
+    (name, DYN_ERROR_FARGS_needs_a_result_type_before_it)
+#define DYN_METHOD_BAD_(name, r, params)                                      \
+    (name, DYN_ERROR_signature_must_be_written_R_FARGS)
+
+/*
+ * INTERFACE(I);   with I##_METHODS defined as a list of METHODs.
  *
  * Defines Vtable(I), Dyn(I), and one dispatching function per method,
  *
@@ -97,17 +136,17 @@
 
 /* Each receives (I, T, R, name, (, A...), (, A p...), (, p...)). */
 
-#define DYN_SLOT_GEN(I, T, R, name, TYPES, DECLS, ARGS)                       \
+#define DYN_SLOT_GEN(I, T, R, name, TYPES, DECLS, PASS)                       \
     R (*name)(void *self DYN_UNPAREN TYPES);
 
-#define DYN_DISPATCH_GEN(I, T, R, name, TYPES, DECLS, ARGS)                   \
+#define DYN_DISPATCH_GEN(I, T, R, name, TYPES, DECLS, PASS)                   \
     DYN_MAYBE_UNUSED                                                          \
     static inline R OVERLOAD(name, Dyn(I))(const Dyn(I) *dyn_                 \
                                            DYN_UNPAREN DECLS) {               \
-        DYN_RETURN(R) (dyn_->vt->name)(dyn_->self DYN_UNPAREN ARGS);          \
+        DYN_RETURN(R) (dyn_->vt->name)(dyn_->self DYN_UNPAREN PASS);          \
     }
 
-#define DYN_CHECK_GEN(I, T, R, name, TYPES, DECLS, ARGS)                      \
+#define DYN_CHECK_GEN(I, T, R, name, TYPES, DECLS, PASS)                      \
     _Static_assert(_Generic(&OVERLOAD(name, T),                               \
                        R (*)(const T * DYN_UNPAREN TYPES): 1,                 \
                        R (*)(T * DYN_UNPAREN TYPES): 1,                       \
@@ -115,12 +154,12 @@
                    "IMPL(" #I ", " #T "): method " #name                      \
                    " does not match the interface's signature");
 
-#define DYN_THUNK_GEN(I, T, R, name, TYPES, DECLS, ARGS)                      \
+#define DYN_THUNK_GEN(I, T, R, name, TYPES, DECLS, PASS)                      \
     static R MONOMORPH_MANGLE(name, I, T)(void *self DYN_UNPAREN DECLS) {     \
-        DYN_RETURN(R) OVERLOAD(name, T)((T *)self DYN_UNPAREN ARGS);          \
+        DYN_RETURN(R) OVERLOAD(name, T)((T *)self DYN_UNPAREN PASS);          \
     }
 
-#define DYN_INIT_GEN(I, T, R, name, TYPES, DECLS, ARGS)                       \
+#define DYN_INIT_GEN(I, T, R, name, TYPES, DECLS, PASS)                       \
     .name = MONOMORPH_MANGLE(name, I, T),
 
 #define DYN_SLOT(I, T, m)      DYN_WITH_SIG(DYN_SLOT_GEN, I, T, m)
@@ -140,42 +179,43 @@
 #define DYN_APPLY_(m, args)   m args
 #define DYN_APPLY2_(m, args)  m args
 
-#define DYN_SIG_2(R, name)                                                    \
+/* (name, R, A1, ..., An), as METHOD makes it  ->  the generators' parts */
+#define DYN_SIG_2(name, R)                                                    \
     R, name,                                                                  \
     (),                                                                       \
     (),                                                                       \
     ()
-#define DYN_SIG_3(R, name, a)                                                 \
+#define DYN_SIG_3(name, R, a)                                                 \
     R, name,                                                                  \
     (, a),                                                                    \
     (, a p_a),                                                                \
     (, p_a)
-#define DYN_SIG_4(R, name, a, b)                                              \
+#define DYN_SIG_4(name, R, a, b)                                              \
     R, name,                                                                  \
     (, a, b),                                                                 \
     (, a p_a, b p_b),                                                         \
     (, p_a, p_b)
-#define DYN_SIG_5(R, name, a, b, c)                                           \
+#define DYN_SIG_5(name, R, a, b, c)                                           \
     R, name,                                                                  \
     (, a, b, c),                                                              \
     (, a p_a, b p_b, c p_c),                                                  \
     (, p_a, p_b, p_c)
-#define DYN_SIG_6(R, name, a, b, c, d)                                        \
+#define DYN_SIG_6(name, R, a, b, c, d)                                        \
     R, name,                                                                  \
     (, a, b, c, d),                                                           \
     (, a p_a, b p_b, c p_c, d p_d),                                           \
     (, p_a, p_b, p_c, p_d)
-#define DYN_SIG_7(R, name, a, b, c, d, e)                                     \
+#define DYN_SIG_7(name, R, a, b, c, d, e)                                     \
     R, name,                                                                  \
     (, a, b, c, d, e),                                                        \
     (, a p_a, b p_b, c p_c, d p_d, e p_e),                                    \
     (, p_a, p_b, p_c, p_d, p_e)
-#define DYN_SIG_8(R, name, a, b, c, d, e, f)                                  \
+#define DYN_SIG_8(name, R, a, b, c, d, e, f)                                  \
     R, name,                                                                  \
     (, a, b, c, d, e, f),                                                     \
     (, a p_a, b p_b, c p_c, d p_d, e p_e, f p_f),                             \
     (, p_a, p_b, p_c, p_d, p_e, p_f)
-#define DYN_SIG_9(R, name, a, b, c, d, e, f, g)                               \
+#define DYN_SIG_9(name, R, a, b, c, d, e, f, g)                               \
     R, name,                                                                  \
     (, a, b, c, d, e, f, g),                                                  \
     (, a p_a, b p_b, c p_c, d p_d, e p_e, f p_f, g p_g),                      \
@@ -389,7 +429,7 @@
 #define DYN_NARG_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, \
                   _15, _16, _17, _18, _19, _20, _21, _22, _23, _24, N, ...)  N
 
-/* 0 for (~, f), 1 for (~, f, args...); used by fn.h's CALL. */
+/* 0 for (~, f), 1 for (~, f, args...); used by DYN_NO_ARGS and fn.h's CALL. */
 #define DYN_HAS_PARAMS(...)                                                   \
     MONOMORPH_CAT(DYN_HAS_PARAMS_, DYN_NARG(__VA_ARGS__))
 #define DYN_HAS_PARAMS_2   0
@@ -413,13 +453,28 @@
 #endif
 
 /* `return` unless R is void. The () only invokes DYN_IS_VOID_void when
-   nothing follows `void`, so `void *` is not void. */
+   nothing follows `void`, so `void *` is not void. An empty R counts as
+   void too, which DYN_NO_ARGS relies on for FARGS(). */
 #define DYN_RETURN(R)     MONOMORPH_CAT(DYN_RETURN_, DYN_IS_VOID(R))
 #define DYN_RETURN_0      return
 #define DYN_RETURN_1
 #define DYN_IS_VOID(R)    DYN_SECOND(MONOMORPH_CAT(DYN_IS_VOID_, R) ())
 #define DYN_IS_VOID_void()        ~, 1
+#define DYN_IS_VOID_()            ~, 1
 #define DYN_SECOND(...)           DYN_SECOND_(__VA_ARGS__, 0, ~)
 #define DYN_SECOND_(a, b, ...)    b
+
+/* 1 for an empty argument list, () or (void); 0 for any arguments. */
+#define DYN_NO_ARGS(...)                                                      \
+    MONOMORPH_CAT(DYN_NO_ARGS_, DYN_HAS_PARAMS(~, __VA_ARGS__))(__VA_ARGS__)
+#define DYN_NO_ARGS_0(a)    DYN_IS_VOID(a)
+#define DYN_NO_ARGS_1(...)  0
+
+/* 1 if the first argument is empty. A type never starts with `(`, so the
+   probe is only invoked when nothing comes before the (). */
+#define DYN_IS_EMPTY(...)         DYN_IS_EMPTY_(DYN_FIRST_(__VA_ARGS__, ~))
+#define DYN_IS_EMPTY_(a)          DYN_SECOND(DYN_EMPTY_PROBE_ a ())
+#define DYN_EMPTY_PROBE_()        ~, 1
+#define DYN_FIRST_(a, ...)        a
 
 #endif /* DYN_H */
