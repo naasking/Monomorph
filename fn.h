@@ -163,7 +163,7 @@
                                                DYN_UNPAREN DECLS) {           \
         DYN_RETURN(R) OVERLOAD(name, T)((T *)self DYN_UNPAREN ARGS);          \
     }                                                                         \
-    FN_MAYBE_UNUSED_                                                          \
+    DYN_MAYBE_UNUSED                                                          \
     static inline FT MONOMORPH_MANGLE(fn, name, T)(T *self) {                 \
         return (FT){ self, MONOMORPH_MANGLE(lambda, name, T) };               \
     }                                                                         \
@@ -171,14 +171,6 @@
                                                DYN_UNPAREN TYPES)
 
 #define FN(T, name, p)  MONOMORPH_MANGLE(fn, name, T)(p)
-
-/* Clang warns about unused static inline functions outside headers, and
-   DELEGATE expands where it is used. */
-#if defined(__GNUC__) || defined(__clang__)
-#  define FN_MAYBE_UNUSED_  __attribute__((unused))
-#else
-#  define FN_MAYBE_UNUSED_
-#endif
 
 
 /* -------------------------------------------------------------------------- */

@@ -82,6 +82,7 @@
     static const Vtable(I) MONOMORPH_MANGLE(vtable, I, T) = {                 \
         DYN_EACH(DYN_INIT, I, T, I##_METHODS)                                 \
     };                                                                        \
+    DYN_MAYBE_UNUSED                                                          \
     static inline Dyn(I) MONOMORPH_MANGLE(dyn, I, T)(T *self) {               \
         return (Dyn(I)){ self, &MONOMORPH_MANGLE(vtable, I, T) };             \
     }                                                                         \
@@ -100,6 +101,7 @@
     R (*name)(void *self DYN_UNPAREN TYPES);
 
 #define DYN_DISPATCH_GEN(I, T, R, name, TYPES, DECLS, ARGS)                   \
+    DYN_MAYBE_UNUSED                                                          \
     static inline R OVERLOAD(name, Dyn(I))(const Dyn(I) *dyn_                 \
                                            DYN_UNPAREN DECLS) {               \
         DYN_RETURN(R) (dyn_->vt->name)(dyn_->self DYN_UNPAREN ARGS);          \
@@ -400,6 +402,15 @@
 #define DYN_HAS_PARAMS_9   1
 
 #define DYN_UNPAREN(...)  __VA_ARGS__
+
+/* Marks generated static inline functions a translation unit may not use.
+   Clang warns about unused ones outside headers, and the macros generating
+   them expand where they are used. */
+#if defined(__GNUC__) || defined(__clang__)
+#  define DYN_MAYBE_UNUSED  __attribute__((unused))
+#else
+#  define DYN_MAYBE_UNUSED
+#endif
 
 /* `return` unless R is void. The () only invokes DYN_IS_VOID_void when
    nothing follows `void`, so `void *` is not void. */
