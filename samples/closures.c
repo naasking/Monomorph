@@ -21,7 +21,7 @@ typedef struct { Dbl w1, w2; } Weighted;
 Dbl apply(Weighted)(const Weighted *self, Dbl x, Dbl y) {
     return self->w1 * x + self->w2 * y;
 }
-BIND(Fn(Dbl, Dbl, Dbl), Weighted, apply);
+DELEGATE(Fn(Dbl, Dbl, Dbl), Weighted, apply);
 
 /* fn y => f (x, y): a struct holding the closure and the fixed argument */
 typedef struct { Fn(Dbl, Dbl, Dbl) f; Dbl x; } WithX;
@@ -29,13 +29,13 @@ typedef struct { Fn(Dbl, Dbl, Dbl) f; Dbl x; } WithX;
 Dbl apply(WithX)(const WithX *self, Dbl y) {
     return CALL(self->f, self->x, y);
 }
-BIND(Fn(Dbl, Dbl), WithX, apply);
+DELEGATE(Fn(Dbl, Dbl), WithX, apply);
 
 /* A closure with mutable state. */
 typedef struct { int n; } Counter;
 
 int next(Counter)(Counter *self) { return ++self->n; }
-BIND(Fn(int), Counter, next);
+DELEGATE(Fn(int), Counter, next);
 
 /* Any existing method can be used as a closure, e.g. a shape's area. */
 typedef struct { Dbl r; } Circle;
@@ -43,7 +43,7 @@ typedef struct { Dbl r; } Circle;
 Dbl area(Circle)(const Circle *self) {
     return 3.141592653589793 * self->r * self->r;
 }
-BIND(Fn(Dbl), Circle, area);
+DELEGATE(Fn(Dbl), Circle, area);
 
 /* A higher-order function over any Fn(Dbl, Dbl). */
 static Dbl sum_over(Fn(Dbl, Dbl) f, const Dbl *xs, size_t n) {

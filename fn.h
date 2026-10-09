@@ -15,7 +15,7 @@
  *   Dbl apply(Weighted)(const Weighted *self, Dbl x, Dbl y) {
  *       return self->w1 * x + self->w2 * y;
  *   }
- *   BIND(Fn(Dbl, Dbl, Dbl), Weighted, apply);     makes apply bindable
+ *   DELEGATE(Fn(Dbl, Dbl, Dbl), Weighted, apply); apply as closure code
  *
  *   Weighted w = { 0.25, 0.75 };
  *   Fn(Dbl, Dbl, Dbl) f = FN(Weighted, apply, &w);
@@ -38,15 +38,27 @@
 /* -------------------------------------------------------------------------- */
 
 /*
- * FN_DEFINE(A1, ..., An, R);   defines Fn(A1, ..., An, R), n = 0..7:
+ * FN_DECLARE(A1, ..., An, R);   declares Fn(A1, ..., An, R), n = 0..7
+ * FN_DEFINE(A1, ..., An, R);    defines it:
  *
  *   struct Fn(A1, ..., An, R) {
  *       void *self;                               the environment
  *       R (*code)(void *self, A1, ..., An);       what to call with it
  *   };
  *
- * Define each signature once per translation unit.
+ * FN_DECLARE can be repeated, so headers declare the signatures they name
+ * and combine freely. A declared Fn can appear in function declarations,
+ * behind pointers and in extern declarations. Anything that needs its size
+ * or members needs it defined: FN, CALL, DELEGATE, passing a closure, a
+ * function definition taking or returning one, or a struct member holding
+ * one.
+ *
+ * FN_DEFINE appears once per signature in each translation unit that needs
+ * the definition; a second one is a redefinition error. Every definition of
+ * a signature is identical, so translation units that each define it agree.
  */
+#define FN_DECLARE(...)  typedef struct Fn(__VA_ARGS__) Fn(__VA_ARGS__)
+
 #define FN_DEFINE(...)                                                        \
     MONOMORPH_CAT(FN_DEFINE_, MONOMORPH_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define FN_STRUCT_(T, R, PARAMS)                                              \
@@ -72,85 +84,86 @@
 
 
 /* -------------------------------------------------------------------------- */
-/* Binding methods                                                            */
+/* Methods as closures                                                        */
 /* -------------------------------------------------------------------------- */
 
 /*
- * BIND(Fn(A1, ..., An, R), T, name);
+ * DELEGATE(Fn(A1, ..., An, R), T, name);
  *
- *   Makes the method OVERLOAD(name, T) bindable as a Fn(A1, ..., An, R).
- *   Generates, in this translation unit:
+ *   Makes the method OVERLOAD(name, T) usable as the code of a
+ *   Fn(A1, ..., An, R). Generates, in this translation unit:
  *
  *     static R lambdaǀnameꞏTǀ(void *self, A1, ..., An)     the adapter
  *     static Fn(...) fnǀnameꞏTǀ(T *self)                    used by FN
  *
  *   The method's self may be `const T *` or `T *`. Its signature is checked
  *   against the Fn's; a missing or mismatched method is a compile error.
- *   Write the signature as a literal Fn(...).
+ *   Write the signature as a literal Fn(...), defined by FN_DEFINE.
  *
  * FN(T, name, p)   the closure of method `name` over p, a `T *`.
  */
-#define BIND(sig, T, name)  FN_BIND_(T, name, FN_SIG_ ## sig)
-#define FN_SIG_Fn(...)      (__VA_ARGS__)
-#define FN_BIND_(T, name, types)                                              \
-    FN_APPLY_(MONOMORPH_CAT(FN_BIND_, MONOMORPH_NARG types),                  \
+#define DELEGATE(sig, T, name)  FN_DELEGATE_(T, name, FN_SIG_ ## sig)
+#define FN_SIG_Fn(...)          (__VA_ARGS__)
+#define FN_DELEGATE_(T, name, types)                                          \
+    FN_APPLY_(MONOMORPH_CAT(FN_DELEGATE_, MONOMORPH_NARG types),              \
               (T, name, DYN_UNPAREN types))
 #define FN_APPLY_(m, args)  m args
 
-#define FN_BIND_1(T, name, r)                                                 \
-    FN_BIND_GEN(T, name, r, Fn(r),                                            \
+#define FN_DELEGATE_1(T, name, r)                                             \
+    FN_DELEGATE_GEN(T, name, r, Fn(r),                                        \
         (),                                                                   \
         (),                                                                   \
         ())
-#define FN_BIND_2(T, name, a, r)                                              \
-    FN_BIND_GEN(T, name, r, Fn(a, r),                                         \
+#define FN_DELEGATE_2(T, name, a, r)                                          \
+    FN_DELEGATE_GEN(T, name, r, Fn(a, r),                                     \
         (, a),                                                                \
         (, a p_a),                                                            \
         (, p_a))
-#define FN_BIND_3(T, name, a, b, r)                                           \
-    FN_BIND_GEN(T, name, r, Fn(a, b, r),                                      \
+#define FN_DELEGATE_3(T, name, a, b, r)                                       \
+    FN_DELEGATE_GEN(T, name, r, Fn(a, b, r),                                  \
         (, a, b),                                                             \
         (, a p_a, b p_b),                                                     \
         (, p_a, p_b))
-#define FN_BIND_4(T, name, a, b, c, r)                                        \
-    FN_BIND_GEN(T, name, r, Fn(a, b, c, r),                                   \
+#define FN_DELEGATE_4(T, name, a, b, c, r)                                    \
+    FN_DELEGATE_GEN(T, name, r, Fn(a, b, c, r),                               \
         (, a, b, c),                                                          \
         (, a p_a, b p_b, c p_c),                                              \
         (, p_a, p_b, p_c))
-#define FN_BIND_5(T, name, a, b, c, d, r)                                     \
-    FN_BIND_GEN(T, name, r, Fn(a, b, c, d, r),                                \
+#define FN_DELEGATE_5(T, name, a, b, c, d, r)                                 \
+    FN_DELEGATE_GEN(T, name, r, Fn(a, b, c, d, r),                            \
         (, a, b, c, d),                                                       \
         (, a p_a, b p_b, c p_c, d p_d),                                       \
         (, p_a, p_b, p_c, p_d))
-#define FN_BIND_6(T, name, a, b, c, d, e, r)                                  \
-    FN_BIND_GEN(T, name, r, Fn(a, b, c, d, e, r),                             \
+#define FN_DELEGATE_6(T, name, a, b, c, d, e, r)                              \
+    FN_DELEGATE_GEN(T, name, r, Fn(a, b, c, d, e, r),                         \
         (, a, b, c, d, e),                                                    \
         (, a p_a, b p_b, c p_c, d p_d, e p_e),                                \
         (, p_a, p_b, p_c, p_d, p_e))
-#define FN_BIND_7(T, name, a, b, c, d, e, f, r)                               \
-    FN_BIND_GEN(T, name, r, Fn(a, b, c, d, e, f, r),                          \
+#define FN_DELEGATE_7(T, name, a, b, c, d, e, f, r)                           \
+    FN_DELEGATE_GEN(T, name, r, Fn(a, b, c, d, e, f, r),                      \
         (, a, b, c, d, e, f),                                                 \
         (, a p_a, b p_b, c p_c, d p_d, e p_e, f p_f),                         \
         (, p_a, p_b, p_c, p_d, p_e, p_f))
-#define FN_BIND_8(T, name, a, b, c, d, e, f, g, r)                            \
-    FN_BIND_GEN(T, name, r, Fn(a, b, c, d, e, f, g, r),                       \
+#define FN_DELEGATE_8(T, name, a, b, c, d, e, f, g, r)                        \
+    FN_DELEGATE_GEN(T, name, r, Fn(a, b, c, d, e, f, g, r),                   \
         (, a, b, c, d, e, f, g),                                              \
         (, a p_a, b p_b, c p_c, d p_d, e p_e, f p_f, g p_g),                  \
         (, p_a, p_b, p_c, p_d, p_e, p_f, p_g))
-#define FN_BIND_MONOMORPH_TOO_MANY(...)                                       \
-    _Static_assert(0, "BIND: at most 7 parameters")
+#define FN_DELEGATE_MONOMORPH_TOO_MANY(...)                                   \
+    _Static_assert(0, "DELEGATE: at most 7 parameters")
 
-#define FN_BIND_GEN(T, name, R, FT, TYPES, DECLS, ARGS)                       \
+#define FN_DELEGATE_GEN(T, name, R, FT, TYPES, DECLS, ARGS)                   \
     _Static_assert(_Generic(&OVERLOAD(name, T),                               \
                        R (*)(const T * DYN_UNPAREN TYPES): 1,                 \
                        R (*)(T * DYN_UNPAREN TYPES): 1,                       \
                        default: 0),                                           \
-                   "BIND(" #T ", " #name "): the method's signature"          \
+                   "DELEGATE(" #T ", " #name "): the method's signature"      \
                    " does not match the Fn");                                 \
     static R MONOMORPH_MANGLE(lambda, name, T)(void *self                     \
                                                DYN_UNPAREN DECLS) {           \
         DYN_RETURN(R) OVERLOAD(name, T)((T *)self DYN_UNPAREN ARGS);          \
     }                                                                         \
+    FN_MAYBE_UNUSED_                                                          \
     static inline FT MONOMORPH_MANGLE(fn, name, T)(T *self) {                 \
         return (FT){ self, MONOMORPH_MANGLE(lambda, name, T) };               \
     }                                                                         \
@@ -158,6 +171,14 @@
                                                DYN_UNPAREN TYPES)
 
 #define FN(T, name, p)  MONOMORPH_MANGLE(fn, name, T)(p)
+
+/* Clang warns about unused static inline functions outside headers, and
+   DELEGATE expands where it is used. */
+#if defined(__GNUC__) || defined(__clang__)
+#  define FN_MAYBE_UNUSED_  __attribute__((unused))
+#else
+#  define FN_MAYBE_UNUSED_
+#endif
 
 
 /* -------------------------------------------------------------------------- */
