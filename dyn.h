@@ -26,15 +26,17 @@
  *   area(Circle)(&c);                       statically bound call
  *
  * Generated code never writes `name(`, so method-name macros like the ones
- * above don't interfere with it.
+ * above don't interfere with it. It also uses only the prefixed
+ * MONOMORPH_TYPE and MONOMORPH_OVERLOAD, so this header and fn.h work with
+ * MONOMORPH_NO_SHORT_NAMES defined.
  */
 #ifndef DYN_H
 #define DYN_H
 
 #include "monomorph.h"
 
-#define Dyn(I)     TYPE(Dyn, I)        /* object pointer + method table */
-#define Vtable(I)  TYPE(Vtable, I)     /* the method table type          */
+#define Dyn(I)     MONOMORPH_TYPE(Dyn, I)     /* object + method table */
+#define Vtable(I)  MONOMORPH_TYPE(Vtable, I)  /* the method table type */
 
 
 /* -------------------------------------------------------------------------- */
@@ -141,13 +143,13 @@
 
 #define DYN_DISPATCH_GEN(I, T, R, name, TYPES, DECLS, PASS)                   \
     DYN_MAYBE_UNUSED                                                          \
-    static inline R OVERLOAD(name, Dyn(I))(const Dyn(I) *dyn_                 \
-                                           DYN_UNPAREN DECLS) {               \
+    static inline R MONOMORPH_OVERLOAD(name, Dyn(I))(                         \
+            const Dyn(I) *dyn_ DYN_UNPAREN DECLS) {                           \
         DYN_RETURN(R) (dyn_->vt->name)(dyn_->self DYN_UNPAREN PASS);          \
     }
 
 #define DYN_CHECK_GEN(I, T, R, name, TYPES, DECLS, PASS)                      \
-    _Static_assert(_Generic(&OVERLOAD(name, T),                               \
+    _Static_assert(_Generic(&MONOMORPH_OVERLOAD(name, T),                     \
                        R (*)(const T * DYN_UNPAREN TYPES): 1,                 \
                        R (*)(T * DYN_UNPAREN TYPES): 1,                       \
                        default: 0),                                           \
@@ -156,7 +158,8 @@
 
 #define DYN_THUNK_GEN(I, T, R, name, TYPES, DECLS, PASS)                      \
     static R MONOMORPH_MANGLE(name, I, T)(void *self DYN_UNPAREN DECLS) {     \
-        DYN_RETURN(R) OVERLOAD(name, T)((T *)self DYN_UNPAREN PASS);          \
+        DYN_RETURN(R)                                                         \
+            MONOMORPH_OVERLOAD(name, T)((T *)self DYN_UNPAREN PASS);          \
     }
 
 #define DYN_INIT_GEN(I, T, R, name, TYPES, DECLS, PASS)                       \

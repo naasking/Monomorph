@@ -68,7 +68,7 @@
  * name with a macro, `#define DblFn Fn(Dbl FARGS(Dbl))`. After a typedef,
  * apply(DblFn) would look for a method of the type DblFn.
  */
-#define Fn(...)  TYPE(Fn, FN_SIG_(__VA_ARGS__))
+#define Fn(...)  MONOMORPH_TYPE(Fn, FN_SIG_(__VA_ARGS__))
 
 /* R FARGS(A1, ..., An)  ->  R, A1, ..., An, checked as METHOD checks it */
 #define FN_SIG_(...)           FN_DROP_NAME_I_(METHOD(~, __VA_ARGS__))
@@ -76,7 +76,7 @@
 #define FN_DROP_NAME_(x, ...)  __VA_ARGS__
 
 /* The Fn of a signature's parts, as DYN_WITH_SIG gives them. */
-#define FN_NAME_(R, TYPES)     TYPE(Fn, R DYN_UNPAREN TYPES)
+#define FN_NAME_(R, TYPES)     MONOMORPH_TYPE(Fn, R DYN_UNPAREN TYPES)
 
 #define FN_DECLARE(...)  typedef struct Fn(__VA_ARGS__) Fn(__VA_ARGS__)
 #define FN_DEFINE(...)                                                        \
@@ -87,7 +87,7 @@
         R (*code)(void *self DYN_UNPAREN TYPES);                              \
     } FN_NAME_(R, TYPES);                                                     \
     DYN_MAYBE_UNUSED                                                          \
-    static inline R OVERLOAD(name, FN_NAME_(R, TYPES))(                       \
+    static inline R MONOMORPH_OVERLOAD(name, FN_NAME_(R, TYPES))(             \
             const FN_NAME_(R, TYPES) *fn_ DYN_UNPAREN DECLS) {                \
         DYN_RETURN(R) fn_->code(fn_->self DYN_UNPAREN PASS);                  \
     }                                                                         \
@@ -120,7 +120,7 @@
     _Static_assert(1, "DELEGATE")
 #define FN_DELEGATE_(I, T, m)  DYN_WITH_SIG(FN_DELEGATE_GEN, I, T, m)
 #define FN_DELEGATE_GEN(I, T, R, name, TYPES, DECLS, PASS)                    \
-    _Static_assert(_Generic(&OVERLOAD(name, T),                               \
+    _Static_assert(_Generic(&MONOMORPH_OVERLOAD(name, T),                     \
                        R (*)(const T * DYN_UNPAREN TYPES): 1,                 \
                        R (*)(T * DYN_UNPAREN TYPES): 1,                       \
                        default: 0),                                           \
@@ -128,7 +128,8 @@
                    " does not match its signature");                          \
     static R MONOMORPH_MANGLE(lambda, name, T)(void *self                     \
                                                DYN_UNPAREN DECLS) {           \
-        DYN_RETURN(R) OVERLOAD(name, T)((T *)self DYN_UNPAREN PASS);          \
+        DYN_RETURN(R)                                                         \
+            MONOMORPH_OVERLOAD(name, T)((T *)self DYN_UNPAREN PASS);          \
     }                                                                         \
     DYN_MAYBE_UNUSED                                                          \
     static inline FN_NAME_(R, TYPES) MONOMORPH_MANGLE(fn, name, T)(T *self) { \
