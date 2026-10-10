@@ -365,7 +365,7 @@ Tested with:
 | `MONOMORPH_TYPE`, `MONOMORPH_OVERLOAD` | same as above, always available |
 | `MONOMORPH_TYPE_NAME`, `MONOMORPH_OVERLOAD_NAME` | mangled name as a string literal |
 
-Define `MONOMORPH_NO_SHORT_NAMES` before including `monomorph.h` to leave out `TYPE` and `OVERLOAD` and use only the prefixed forms. `TYPE` and `OVERLOAD` mangle identically; the two names exist to document intent. `dyn.h` and `fn.h` use the short names themselves, so they don't compile with `MONOMORPH_NO_SHORT_NAMES` defined.
+Define `MONOMORPH_NO_SHORT_NAMES` before including `monomorph.h` to leave out `TYPE` and `OVERLOAD` and use only the prefixed forms. `TYPE` and `OVERLOAD` mangle identically; the two names exist to document intent. `dyn.h` and `fn.h` work either way, since they use only the prefixed forms. Without the short names, write methods as `MONOMORPH_OVERLOAD(name, T)`.
 
 ### dyn.h
 
