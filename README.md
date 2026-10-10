@@ -1,6 +1,12 @@
 # Monomorph
 
-Header-only C11 macros that mimic high-level abstractions through monomorphisation: parametric types, type-constructor polymorphism, and type-class-style overloaded methods. Every instantiation is a concrete C type or function with a readable name, so there's no `void *`, no function pointers, and no runtime dispatch.
+Header-only C11 macros that mimic high-level abstractions: parametric types, type-constructor polymorphism and type-class-style overloaded methods, resolved at compile time through monomorphisation, plus interfaces with dynamic dispatch and closures for when a type is only known at run time. Every type and function they generate is a concrete C type or function with a readable name.
+
+| Header | Provides |
+|---|---|
+| [`monomorph.h`](monomorph.h) | `TYPE` and `OVERLOAD`: parametric types and overloaded methods. Every instantiation is a concrete C type or function, so there's no `void *`, no function pointers, and no runtime dispatch. |
+| [`dyn.h`](dyn.h) | Interfaces with dynamic dispatch, in the style of Rust's `dyn Trait`: a value that is an object pointer plus a table of its type's methods. Includes `monomorph.h`. |
+| [`fn.h`](fn.h) | Closures, the one-method case of an interface: an environment pointer plus a code pointer. Includes `dyn.h`. |
 
 ```
 List(Str)                       →  ListǀStrǀ
@@ -8,9 +14,14 @@ eq(Str)                         →  eqǀStrǀ
 contains(Matrix(int))           →  containsǀMatrixǀintǀǀ
 List(Matrix(int))               →  ListǀMatrixǀintǀǀ
 Pair(Str, int)                  →  PairǀStrꞏintǀ
+Dyn(Shape)                      →  DynǀShapeǀ
+area(Dyn(Shape))                →  areaǀDynǀShapeǀǀ
+Fn(Dbl FARGS(Dbl))              →  FnǀDblꞏDblǀ
 ```
 
-## Example
+Methods are ordinary overloads in all three headers, so generic code written against a method works for concrete types, called directly, and for interfaces and closures, called through a table.
+
+## monomorph.h: types and overloads
 
 The pieces below build a list and a matrix, an `eq` method, a `filter` that depends on `eq`, and a `contains` that works for any container type.
 
@@ -172,6 +183,132 @@ list_impl.h:19:14: note: in expansion of macro ‘eq’
 
 This is an error by default from GCC 14. On older versions, compile with `-Werror=implicit-function-declaration`.
 
+## dyn.h: interfaces
+
+An interface lists method signatures, and `Dyn(I)` holds a value of any type that implements it: an object pointer plus a pointer to a table of that type's methods, like Rust's `dyn Trait`. Types stay plain structs that know nothing of the interfaces they implement, and any translation unit can implement any interface for any type.
+
+Methods are the same overloads as above, `OVERLOAD(name, T)`, taking a `const T *` or `T *` first. An interface's signatures are written the way its methods are defined, `METHOD(name, R FARGS(A1, ..., An))`, not counting `self`. `FARGS()` means no parameters.
+
+```c
+#include <stdio.h>
+#include "dyn.h"
+
+typedef double Dbl;
+
+#define area(T)      OVERLOAD(area, T)
+#define scale(T)     OVERLOAD(scale, T)
+#define describe(T)  OVERLOAD(describe, T)
+
+/* An interface: its methods' names and signatures. */
+#define Shape_METHODS                   \
+    METHOD(area,  Dbl  FARGS()),        \
+    METHOD(scale, void FARGS(Dbl))
+INTERFACE(Shape);
+
+/* A type that knows nothing of Shape, and its methods. */
+typedef struct { Dbl r; } Circle;
+
+Dbl area(Circle)(const Circle *self) {
+    return 3.141592653589793 * self->r * self->r;
+}
+void scale(Circle)(Circle *self, Dbl k) {
+    self->r *= k;
+}
+
+/* Implementing Shape for Circle; this could be in any file. */
+IMPL(Shape, Circle);
+```
+
+`INTERFACE(Shape)` defines `Dyn(Shape)` and, for each method, a function that dispatches through the table, such as `area(Dyn(Shape))`. Like the methods, it takes a pointer, so generic code written against `area(T)` works for a concrete type, calling its method directly, and for `Dyn(Shape)`, calling through each object's table:
+
+```c
+#define DEFINE_DESCRIBE(T)                                    \
+    static void describe(T)(const T *x) {                     \
+        printf("area %g\n", area(T)(x));                      \
+    }
+DEFINE_DESCRIBE(Circle)         /* calls areaǀCircleǀ directly */
+DEFINE_DESCRIBE(Dyn(Shape))     /* calls through the table     */
+
+int main(void) {
+    Circle c = { 1 };
+    Dyn(Shape) s = DYN(Shape, Circle, &c);
+
+    scale(Dyn(Shape))(&s, 2);   /* dynamic dispatch: c.r is now 2 */
+    describe(Dyn(Shape))(&s);   /* area 12.5664 */
+    describe(Circle)(&c);       /* area 12.5664 */
+    return 0;
+}
+```
+
+`IMPL(Shape, Circle)` checks each of `Circle`'s methods against the interface. A missing method is an undeclared identifier, and a mismatched one fails a static assertion:
+
+```
+error: static assertion failed: IMPL(Shape, Circle): method scale does not match the interface's signature
+```
+
+A type can implement any number of interfaces, and an interface added later can be made of methods that already exist: [`samples/shapes.c`](samples/shapes.c) adds a `Sized` interface with `area` alone. A `Dyn` borrows its object, so it must not outlive it.
+
+## fn.h: closures
+
+A closure is the one-method case of an interface: an environment pointer plus a code pointer. An environment is any struct and its code is any of the struct's methods, so every method can also be used as a closure. Closure types are written like method signatures, `Fn(R FARGS(A1, ..., An))`, and a closure is called like a method, through `apply`:
+
+```c
+#include <stdio.h>
+#include "fn.h"
+
+typedef double Dbl;
+
+#define apply(T)  OVERLOAD(apply, T)
+
+FN_DEFINE(Dbl FARGS(Dbl, Dbl));         /* defines Fn(Dbl FARGS(Dbl, Dbl)) */
+
+/* (x, y) => w1*x + w2*y: the environment is a struct, the code a method. */
+typedef struct { Dbl w1, w2; } Weighted;
+
+Dbl apply(Weighted)(const Weighted *self, Dbl x, Dbl y) {
+    return self->w1 * x + self->w2 * y;
+}
+DELEGATE(Weighted, METHOD(apply, Dbl FARGS(Dbl, Dbl)));
+
+int main(void) {
+    Weighted w = { 0.25, 0.75 };
+    Fn(Dbl FARGS(Dbl, Dbl)) f = FN(Weighted, apply, &w);
+
+    printf("%g\n", CALL(f, 4, 8));                              /* 7 */
+    printf("%g\n", apply(Fn(Dbl FARGS(Dbl, Dbl)))(&f, 4, 8));   /* 7 */
+    return 0;
+}
+```
+
+- `FN_DEFINE(R FARGS(A1, ..., An))` defines the closure type, a struct of `void *self` and `R (*code)(void *self, A1, ..., An)`, along with its `apply` method. Write it once per signature in each translation unit that needs the definition. Every definition of a signature is identical, so translation units agree. `FN_DECLARE` only declares the type and can be repeated, so headers can name closure types in their declarations.
+- `DELEGATE(T, METHOD(...), ...)` makes methods of `T` usable as closure code, checking each against its signature as `IMPL` does. An interface's method list can be passed as is: `DELEGATE(Circle, Shape_METHODS)`.
+- `FN(T, name, p)` is the closure of method `name` over `p`, a `T *`.
+- `CALL(f, args...)` calls `f` and evaluates it twice, so pass a variable. `apply(Fn(...))(&f, args...)` is the same call written as a method, so generic code written against `apply(T)` takes either a concrete type or any closure with the same signature.
+
+A `Fn` borrows its environment, so it must not outlive it. To return a closure, return the environment struct and make the closure with `FN` where it's used, or allocate the environment, as [`samples/tagless.c`](samples/tagless.c) does.
+
+Types are named by how they're spelled, so give a closure type a short name with a macro, `#define DblFn Fn(Dbl FARGS(Dbl))`, not a typedef. After a typedef, `apply(DblFn)` would look for a method of a type named `DblFn`.
+
+## Samples
+
+Each sample is a single file. Build it from the repository root:
+
+```sh
+gcc -std=c11 -Wall -Wextra -pedantic -I . samples/tagless.c -o tagless
+cl /std:c11 /utf-8 /Zc:preprocessor /I . samples\tagless.c
+```
+
+- [`samples/shapes.c`](samples/shapes.c) uses `dyn.h`. It implements a `Shape` interface for `Circle` and `Rect`, and instantiates a generic `describe` for `Circle` and for `Dyn(Shape)`. It then adds a second interface, `Sized`, made of a method that already exists.
+- [`samples/closures.c`](samples/closures.c) uses `fn.h`. It covers closures over a struct of weights, partial application by capturing another closure, mutable state in a counter, and a circle's `area` method used as a closure. Its `sum_over` is generic over `apply(T)` and is instantiated for both a concrete type and closures.
+- [`samples/tagless.c`](samples/tagless.c) uses both, for a tagless-final interpreter of the simply typed lambda calculus with integers, after Carette, Kiselyov and Shan's *Finally Tagless, Partially Evaluated*. The language is an interface, and an evaluator and a pretty-printer implement it. Each term is a C function, compiled once and run by both. Lambdas take their bodies as closures (higher-order abstract syntax). Object-language types are C types, so an ill-typed term doesn't compile. C has no generic methods, so `lam` and `app` get a method for each function type the program uses.
+
+  ```
+  (\x0. x0 + x0) 21                                  = 42  in 1 step
+  (\x0. \x1. x0 + x1) 1 2                            = 3   in 2 steps
+  (\x0. \x1. x0 (x0 x1)) (\x0. x0 + x0) 5            = 20  in 4 steps
+  (\x0. \x1. x0 (x0 x1)) ((\x0. \x1. x0 + x1) 10) 1  = 21  in 5 steps
+  ```
+
 ## Naming scheme
 
 | Character | Code point | Role |
@@ -181,11 +318,24 @@ This is an error by default from GCC 14. On older versions, compile with `-Werro
 
 Both are Unicode letters, so mangled names are ordinary C identifiers. Neither appears in normal type names, so every name decodes unambiguously: `ǀ` followed by a name opens a list, and `ǀ` followed by `ꞏ`, another `ǀ`, or the end of the name closes one.
 
+`dyn.h` and `fn.h` name what they generate the same way, so diagnostics and debuggers show which interface, type or signature each name belongs to:
+
+| Written | Generates |
+|---|---|
+| `INTERFACE(Shape)` | `DynǀShapeǀ`, `VtableǀShapeǀ`, and a dispatcher per method, such as `areaǀDynǀShapeǀǀ` |
+| `IMPL(Shape, Circle)` | the table `vtableǀShapeꞏCircleǀ`, its entries such as `areaǀShapeꞏCircleǀ`, and `dynǀShapeꞏCircleǀ`, which `DYN` calls |
+| `Fn(Dbl FARGS(Dbl, Dbl))` | `FnǀDblꞏDblꞏDblǀ`: the result type, then the parameters |
+| `DELEGATE(Weighted, METHOD(apply, ...))` | the adapter `lambdaǀapplyꞏWeightedǀ`, and `fnǀapplyꞏWeightedǀ`, which `FN` calls |
+
 ## Requirements
 
-- C11 or later, with UTF-8 source files.
-- Tested with GCC 13 (`-std=c11`, `c17`, `c2x` with `-Wall -Wextra -pedantic`). GCC 10 or later is required for UTF-8 identifiers.
-- Clang and MSVC are untested. MSVC needs `/utf-8` and the conforming preprocessor, `/Zc:preprocessor`.
+- C11, with UTF-8 source files. Nothing newer is needed, and later standards also work.
+- A compiler that accepts UTF-8 identifiers. With GCC that means version 10 or later. MSVC needs `/utf-8`, the conforming preprocessor `/Zc:preprocessor`, and its C11 mode `/std:c11`, which was added in Visual Studio 2019 16.8.
+
+Tested with:
+
+- GCC 13: `-std=c11`, `c17` and `c2x` with `-Wall -Wextra -pedantic`.
+- Clang 19 and MSVC 19.44: the samples build without warnings with `-std=c11 -Wall -Wextra -pedantic` and `/std:c11 /W4`. Older versions of either have not been tried.
 
 ## Limitations
 
@@ -193,6 +343,10 @@ Both are Unicode letters, so mangled names are ordinary C identifiers. Neither a
 - **Don't reuse macro names in typedefs.** Arguments are expanded before mangling, so if a type name is a macro in one file and a typedef in another, the two files produce different names and won't link.
 - **1 to 8 type parameters.** Passing 9 to 16 produces a name containing `MONOMORPH_ERROR_more_than_8_type_parameters`. Zero is not diagnosed: `TYPE(List)` yields `Listǀǀ`.
 - **Instantiate each type once per translation unit.** Including an implementation twice for the same parameters redefines its types. Non-`static` functions must be instantiated once per program, so split those implementations into a declarations header and a definitions file compiled once.
+- **Interfaces hold up to 16 methods, each with up to 7 parameters.** Closures also take up to 7 parameters, and `DELEGATE` accepts up to 16 methods.
+- **Interfaces can't have generic methods.** A table slot has one signature, so a method that is generic in its types needs a slot for each instantiation, as `lam` and `app` have in `samples/tagless.c`.
+- **`Dyn` and `Fn` values borrow** the object or environment they're made from.
+- **Name closure types with macros, not typedefs**, as described under [fn.h](#fnh-closures).
 - **Locale.** GCC prints these names as-is only under a UTF-8 locale. Under `LANG=C` it prints escapes like `\U000001c0`, so set `LANG=C.UTF-8` in CI.
 - **Fonts and editors.** Most coding fonts don't include `ǀ` or `ꞏ`, so editors draw them from a fallback font. VS Code highlights `ǀ` as ambiguous because it resembles `I`. To turn that off, add it to your settings:
 
@@ -202,6 +356,8 @@ Both are Unicode letters, so mangled names are ordinary C identifiers. Neither a
 
 ## API
 
+### monomorph.h
+
 | Macro | Expands to |
 |---|---|
 | `TYPE(Ctor, T, ...)` | mangled type name |
@@ -209,4 +365,25 @@ Both are Unicode letters, so mangled names are ordinary C identifiers. Neither a
 | `MONOMORPH_TYPE`, `MONOMORPH_OVERLOAD` | same as above, always available |
 | `MONOMORPH_TYPE_NAME`, `MONOMORPH_OVERLOAD_NAME` | mangled name as a string literal |
 
-Define `MONOMORPH_NO_SHORT_NAMES` before including `monomorph.h` to leave out `TYPE` and `OVERLOAD` and use only the prefixed forms. `TYPE` and `OVERLOAD` mangle identically; the two names exist to document intent.
+Define `MONOMORPH_NO_SHORT_NAMES` before including `monomorph.h` to leave out `TYPE` and `OVERLOAD` and use only the prefixed forms. `TYPE` and `OVERLOAD` mangle identically; the two names exist to document intent. `dyn.h` and `fn.h` use the short names themselves, so they don't compile with `MONOMORPH_NO_SHORT_NAMES` defined.
+
+### dyn.h
+
+| Macro | Meaning |
+|---|---|
+| `METHOD(name, R FARGS(A1, ..., An))` | a method signature, not counting `self`, for `INTERFACE` and `DELEGATE` |
+| `INTERFACE(I)` | defines `Dyn(I)`, `Vtable(I)`, and a dispatching `name(Dyn(I))` for each method listed in `I_METHODS` |
+| `IMPL(I, T)` | implements `I` for `T`: checks `T`'s methods and defines its method table |
+| `DYN(I, T, p)` | the `Dyn(I)` of `p`, a `T *` |
+| `Dyn(I)`, `Vtable(I)` | the interface's value and method-table types |
+
+### fn.h
+
+| Macro | Meaning |
+|---|---|
+| `Fn(R FARGS(A1, ..., An))` | the closure type |
+| `FN_DECLARE(R FARGS(...))` | declares it; may be repeated |
+| `FN_DEFINE(R FARGS(...))` | defines it and its `apply` method, once per translation unit |
+| `DELEGATE(T, METHOD(...), ...)` | makes `T`'s methods usable as closures |
+| `FN(T, name, p)` | the closure of method `name` over `p`, a `T *` |
+| `CALL(f, args...)` | calls `f`, evaluating it twice |
