@@ -11,14 +11,15 @@ typedef double Dbl;
 #define scale(T)      OVERLOAD(scale, T)
 #define describe(T)   OVERLOAD(describe, T)
 
-/* An interface: its methods' names and signatures. */
-#define Shape_METHODS                   \
+/* An interface: its methods' names and signatures. INTERFACE defines the
+   type IShape, which holds any object implementing it. */
+#define IShape_METHODS                  \
     METHOD(area,      Dbl  FARGS()),    \
     METHOD(perimeter, Dbl  FARGS()),    \
     METHOD(scale,     void FARGS(Dbl))
-INTERFACE(Shape);
+INTERFACE(IShape);
 
-/* Two types that know nothing about Shape. */
+/* Two types that know nothing about IShape. */
 typedef struct { Dbl r; } Circle;
 typedef struct { Dbl w, h; } Rect;
 
@@ -44,22 +45,22 @@ void scale(Rect)(Rect *self, Dbl k) {
     self->h *= k;
 }
 
-/* Implementing Shape for them; this could be in any file. */
-IMPL(Shape, Circle);
-IMPL(Shape, Rect);
+/* Implementing IShape for them; this could be in any file. */
+IMPL(IShape, Circle);
+IMPL(IShape, Rect);
 
 /* A second interface, added later, reusing an existing method. */
-#define Sized_METHODS  METHOD(area, Dbl FARGS())
-INTERFACE(Sized);
-IMPL(Sized, Rect);
+#define ISized_METHODS  METHOD(area, Dbl FARGS())
+INTERFACE(ISized);
+IMPL(ISized, Rect);
 
-/* Generic code, instantiated for a concrete type or for a Dyn. */
+/* Generic code, instantiated for a concrete type or for an interface. */
 #define DEFINE_DESCRIBE(T)                                                   \
     static void describe(T)(const T *x) {                                    \
         printf("area %6.2f   perimeter %6.2f\n", area(T)(x), perimeter(T)(x)); \
     }
 DEFINE_DESCRIBE(Circle)       /* calls areaǀCircleǀ directly           */
-DEFINE_DESCRIBE(Dyn(Shape))   /* calls through each object's table     */
+DEFINE_DESCRIBE(IShape)       /* calls through each object's table     */
 
 int main(void) {
     Circle c = { 1 };
@@ -67,13 +68,15 @@ int main(void) {
 
     describe(Circle)(&c);                          /* static dispatch  */
 
-    Dyn(Shape) shapes[] = { DYN(Shape, Circle, &c), DYN(Shape, Rect, &r) };
+    IShape shapes[] = { DYN(IShape, Circle, &c), DYN(IShape, Rect, &r) };
     for (size_t i = 0; i < 2; i++) {
-        scale(Dyn(Shape))(&shapes[i], 2);          /* dynamic dispatch */
-        describe(Dyn(Shape))(&shapes[i]);
+        scale(IShape)(&shapes[i], 2);              /* dynamic dispatch */
+        describe(IShape)(&shapes[i]);
     }
 
-    Dyn(Sized) z = DYN(Sized, Rect, &r);
-    printf("%g %g\n", area(Circle)(&c), area(Dyn(Sized))(&z));  /* 12.5664 24 */
+    /* An interface value can also be called through its table directly. */
+    ISized z = DYN(ISized, Rect, &r);
+    printf("%g %g %g\n", area(Circle)(&c), area(ISized)(&z),
+           VCALL(z, area));                        /* 12.5664 24 24    */
     return 0;
 }

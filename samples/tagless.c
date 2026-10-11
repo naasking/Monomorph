@@ -3,10 +3,10 @@
  * integers (Carette, Kiselyov and Shan, "Finally Tagless, Partially
  * Evaluated").
  *
- * The language is an interface, Lang, with a method per construct, and an
+ * The language is an interface, ILang, with a method per construct, and an
  * interpreter is an implementation of it: Eval computes a term's value and
  * Show prints it. A term is a C function taking any implementation, through
- * Dyn(Lang), so each is compiled once and run by both.
+ * ILang, so each is compiled once and run by both.
  *
  * Lambdas are higher-order abstract syntax: lam takes its body as a closure
  * from the variable to the body, so the object language's variables are C
@@ -100,26 +100,26 @@ ARROWS(DEFINE_ARROW)
  *   lam(f)     \x. f(x), for f a Body(A, B)             A -> B
  *   app(f, x)  f x, for f : A -> B and x : A            B
  */
-#define Lang_METHODS                                                          \
+#define ILang_METHODS                                                         \
     METHOD(lit, Repr(Int) FARGS(int)),                                        \
     METHOD(add, Repr(Int) FARGS(Repr(Int), Repr(Int)))                        \
     ARROWS(LANG_ARROW_METHODS)
 #define LANG_ARROW_METHODS(A, B)                                              \
     , METHOD(OVERLOAD(lam, A, B), Repr(Arr(A, B)) FARGS(Body(A, B)))          \
     , METHOD(OVERLOAD(app, A, B), Repr(B) FARGS(Repr(Arr(A, B)), Repr(A)))
-INTERFACE(Lang);
+INTERFACE(ILang);
 
-/* Writing terms against any interpreter L, a `const Dyn(Lang) *`. LAM and
+/* Writing terms against any interpreter L, a `const ILang *`. LAM and
    APP pick the instance from the type of the body or function they are
    given, as type inference would. That argument is also read, unevaluated,
    for its type, and MSVC warns of a compound literal there, so make the
    body's environment first. */
-#define LIT(L, n)      lit(Dyn(Lang))(L, n)
-#define ADD(L, a, b)   add(Dyn(Lang))(L, a, b)
+#define LIT(L, n)      lit(ILang)(L, n)
+#define ADD(L, a, b)   add(ILang)(L, a, b)
 #define LAM(L, f)      _Generic((f) ARROWS(LAM_AT_))(L, f)
 #define APP(L, f, x)   _Generic((f) ARROWS(APP_AT_))(L, f, x)
-#define LAM_AT_(A, B)  , Body(A, B): lam(A, B, Dyn(Lang))
-#define APP_AT_(A, B)  , Repr(Arr(A, B)): app(A, B, Dyn(Lang))
+#define LAM_AT_(A, B)  , Body(A, B): lam(A, B, ILang)
+#define APP_AT_(A, B)  , Repr(Arr(A, B)): app(A, B, ILang)
 
 
 /* -------------------------------------------------------------------------- */
@@ -151,7 +151,7 @@ Repr(Int) add(Eval)(const Eval *self, Repr(Int) a, Repr(Int) b) {
     }
 ARROWS(EVAL_ARROW)
 
-IMPL(Lang, Eval);
+IMPL(ILang, Eval);
 
 
 /* -------------------------------------------------------------------------- */
@@ -214,7 +214,7 @@ Repr(Int) add(Show)(const Show *self, Repr(Int) a, Repr(Int) b) {
     }
 ARROWS(SHOW_ARROW)
 
-IMPL(Lang, Show);
+IMPL(ILang, Show);
 
 
 /* -------------------------------------------------------------------------- */
@@ -223,24 +223,24 @@ IMPL(Lang, Show);
 
 /* A lambda's body is a closure: a struct of the variables it captures, with
    an apply method. Eval keeps bodies past the call making them, so they are
-   on the heap. Terms see only Dyn(Lang), never an interpreter. */
+   on the heap. Terms see only ILang, never an interpreter. */
 
 /* \x. x + x */
-typedef struct { const Dyn(Lang) *L; } Double;
+typedef struct { const ILang *L; } Double;
 
 Repr(Int) apply(Double)(const Double *self, Repr(Int) x) {
     return ADD(self->L, x, x);
 }
 DELEGATE(Double, METHOD(apply, Repr(Int) FARGS(Repr(Int))));
 
-static Repr(Arr(Int, Int)) dbl(const Dyn(Lang) *L) {
+static Repr(Arr(Int, Int)) dbl(const ILang *L) {
     Double *body = NEW(Double, L);
     return LAM(L, FN(Double, apply, body));
 }
 
 /* \x. \y. x + y */
-typedef struct { const Dyn(Lang) *L; Repr(Int) x; } PlusX;     /* \y. x + y */
-typedef struct { const Dyn(Lang) *L; } Plus;
+typedef struct { const ILang *L; Repr(Int) x; } PlusX;        /* \y. x + y */
+typedef struct { const ILang *L; } Plus;
 
 Repr(Int) apply(PlusX)(const PlusX *self, Repr(Int) y) {
     return ADD(self->L, self->x, y);
@@ -253,14 +253,14 @@ Repr(Arr(Int, Int)) apply(Plus)(const Plus *self, Repr(Int) x) {
 }
 DELEGATE(Plus, METHOD(apply, Repr(Arr(Int, Int)) FARGS(Repr(Int))));
 
-static Repr(Arr(Int, Arr(Int, Int))) plus(const Dyn(Lang) *L) {
+static Repr(Arr(Int, Arr(Int, Int))) plus(const ILang *L) {
     Plus *body = NEW(Plus, L);
     return LAM(L, FN(Plus, apply, body));
 }
 
 /* \f. \x. f (f x) */
-typedef struct { const Dyn(Lang) *L; Repr(Arr(Int, Int)) f; } TwiceF;
-typedef struct { const Dyn(Lang) *L; } Twice;
+typedef struct { const ILang *L; Repr(Arr(Int, Int)) f; } TwiceF;
+typedef struct { const ILang *L; } Twice;
 
 Repr(Int) apply(TwiceF)(const TwiceF *self, Repr(Int) x) {
     return APP(self->L, self->f, APP(self->L, self->f, x));
@@ -273,7 +273,7 @@ Repr(Arr(Int, Int)) apply(Twice)(const Twice *self, Repr(Arr(Int, Int)) f) {
 }
 DELEGATE(Twice, METHOD(apply, Repr(Arr(Int, Int)) FARGS(Repr(Arr(Int, Int)))));
 
-static Repr(Arr(Arr(Int, Int), Arr(Int, Int))) twice(const Dyn(Lang) *L) {
+static Repr(Arr(Arr(Int, Int), Arr(Int, Int))) twice(const ILang *L) {
     Twice *body = NEW(Twice, L);
     return LAM(L, FN(Twice, apply, body));
 }
@@ -284,18 +284,18 @@ static Repr(Arr(Arr(Int, Int), Arr(Int, Int))) twice(const Dyn(Lang) *L) {
  *   APP(L, dbl(L), dbl(L))          dbl takes an Int, not an Int -> Int
  *   ADD(L, dbl(L), LIT(L, 1))       Int -> Int is not an Int
  */
-typedef Repr(Int) Program(const Dyn(Lang) *L);
+typedef Repr(Int) Program(const ILang *L);
 
-static Repr(Int) double_21(const Dyn(Lang) *L) {
+static Repr(Int) double_21(const ILang *L) {
     return APP(L, dbl(L), LIT(L, 21));
 }
-static Repr(Int) plus_1_2(const Dyn(Lang) *L) {
+static Repr(Int) plus_1_2(const ILang *L) {
     return APP(L, APP(L, plus(L), LIT(L, 1)), LIT(L, 2));
 }
-static Repr(Int) twice_double_5(const Dyn(Lang) *L) {
+static Repr(Int) twice_double_5(const ILang *L) {
     return APP(L, APP(L, twice(L), dbl(L)), LIT(L, 5));
 }
-static Repr(Int) twice_plus_10_1(const Dyn(Lang) *L) {
+static Repr(Int) twice_plus_10_1(const ILang *L) {
     return APP(L, APP(L, twice(L), APP(L, plus(L), LIT(L, 10))), LIT(L, 1));
 }
 
@@ -312,8 +312,8 @@ int main(void) {
         /* The same compiled program, interpreted two ways. */
         Show show = { 0 };
         Eval eval = { 0 };
-        Dyn(Lang) by_show = DYN(Lang, Show, &show);
-        Dyn(Lang) by_eval = DYN(Lang, Eval, &eval);
+        ILang by_show = DYN(ILang, Show, &show);
+        ILang by_eval = DYN(ILang, Eval, &eval);
 
         const char *text = text_at(LAM_PREC, programs[i](&by_show).p);
         int value = *(int *)programs[i](&by_eval).p;

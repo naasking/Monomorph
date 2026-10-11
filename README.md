@@ -5,7 +5,7 @@ Header-only C11 macros that mimic high-level abstractions: parametric types, typ
 | Header | Provides |
 |---|---|
 | [`monomorph.h`](monomorph.h) | `TYPE` and `OVERLOAD`: parametric types and overloaded methods. Every instantiation is a concrete C type or function, so there's no `void *`, no function pointers, and no runtime dispatch. |
-| [`dyn.h`](dyn.h) | Interfaces with dynamic dispatch, in the style of Rust's `dyn Trait`: a value that is an object pointer plus a table of its type's methods. Includes `monomorph.h`. |
+| [`dyn.h`](dyn.h) | Interfaces with dynamic dispatch, in the style of C#'s interface types and Rust's `dyn Trait`. An interface is a type, whose values are an object pointer plus a table of that object's type's methods. Interfaces can be generic, like C#'s `IComparer<T>`. Includes `monomorph.h`. |
 | [`fn.h`](fn.h) | Closures, the one-method case of an interface: an environment pointer plus a code pointer. Includes `dyn.h`. |
 
 ```
@@ -14,8 +14,8 @@ eq(Str)                         →  eqǀStrǀ
 contains(Matrix(int))           →  containsǀMatrixǀintǀǀ
 List(Matrix(int))               →  ListǀMatrixǀintǀǀ
 Pair(Str, int)                  →  PairǀStrꞏintǀ
-Dyn(Shape)                      →  DynǀShapeǀ
-area(Dyn(Shape))                →  areaǀDynǀShapeǀǀ
+area(IShape)                    →  areaǀIShapeǀ
+IComparer(Str)                  →  IComparerǀStrǀ
 Fn(Dbl FARGS(Dbl))              →  FnǀDblꞏDblǀ
 ```
 
@@ -185,7 +185,7 @@ This is an error by default from GCC 14. On older versions, compile with `-Werro
 
 ## dyn.h: interfaces
 
-An interface lists method signatures, and `Dyn(I)` holds a value of any type that implements it: an object pointer plus a pointer to a table of that type's methods, like Rust's `dyn Trait`. Types stay plain structs that know nothing of the interfaces they implement, and any translation unit can implement any interface for any type.
+An interface lists method signatures, and is a type. `INTERFACE(IShape)` defines `IShape`, a value of which holds any object that implements it: an object pointer plus a pointer to a table of that object's type's methods. It works like C#'s interface types and Rust's `dyn Trait`. Name interfaces as C# does, with an `I` prefix. Types stay plain structs that know nothing of the interfaces they implement, and any translation unit can implement any interface for any type.
 
 Methods are the same overloads as above, `OVERLOAD(name, T)`, taking a `const T *` or `T *` first. An interface's signatures are written the way its methods are defined, `METHOD(name, R FARGS(A1, ..., An))`, not counting `self`. `FARGS()` means no parameters.
 
@@ -200,12 +200,12 @@ typedef double Dbl;
 #define describe(T)  OVERLOAD(describe, T)
 
 /* An interface: its methods' names and signatures. */
-#define Shape_METHODS                   \
+#define IShape_METHODS                  \
     METHOD(area,  Dbl  FARGS()),        \
     METHOD(scale, void FARGS(Dbl))
-INTERFACE(Shape);
+INTERFACE(IShape);
 
-/* A type that knows nothing of Shape, and its methods. */
+/* A type that knows nothing of IShape, and its methods. */
 typedef struct { Dbl r; } Circle;
 
 Dbl area(Circle)(const Circle *self) {
@@ -215,11 +215,11 @@ void scale(Circle)(Circle *self, Dbl k) {
     self->r *= k;
 }
 
-/* Implementing Shape for Circle; this could be in any file. */
-IMPL(Shape, Circle);
+/* Implementing IShape for Circle; this could be in any file. */
+IMPL(IShape, Circle);
 ```
 
-`INTERFACE(Shape)` defines `Dyn(Shape)` and, for each method, a function that dispatches through the table, such as `area(Dyn(Shape))`. Like the methods, it takes a pointer, so generic code written against `area(T)` works for a concrete type, calling its method directly, and for `Dyn(Shape)`, calling through each object's table:
+`INTERFACE(IShape)` defines the type `IShape`, a struct of `void *self` and `const Vtable(IShape) *vt`. It also defines a function for each method that dispatches through the table, such as `area(IShape)`. Like the methods, these take a pointer, so generic code written against `area(T)` works both for a concrete type, calling its method directly, and for `IShape`, calling through each object's table:
 
 ```c
 #define DEFINE_DESCRIBE(T)                                    \
@@ -227,26 +227,111 @@ IMPL(Shape, Circle);
         printf("area %g\n", area(T)(x));                      \
     }
 DEFINE_DESCRIBE(Circle)         /* calls areaǀCircleǀ directly */
-DEFINE_DESCRIBE(Dyn(Shape))     /* calls through the table     */
+DEFINE_DESCRIBE(IShape)         /* calls through the table     */
 
 int main(void) {
     Circle c = { 1 };
-    Dyn(Shape) s = DYN(Shape, Circle, &c);
+    IShape s = DYN(IShape, Circle, &c);
 
-    scale(Dyn(Shape))(&s, 2);   /* dynamic dispatch: c.r is now 2 */
-    describe(Dyn(Shape))(&s);   /* area 12.5664 */
+    scale(IShape)(&s, 2);       /* dynamic dispatch: c.r is now 2 */
+    describe(IShape)(&s);       /* area 12.5664 */
     describe(Circle)(&c);       /* area 12.5664 */
+    printf("%g\n", VCALL(s, area));   /* 12.5664, through the table directly */
     return 0;
 }
 ```
 
-`IMPL(Shape, Circle)` checks each of `Circle`'s methods against the interface. A missing method is an undeclared identifier, and a mismatched one fails a static assertion:
+An interface value is a plain struct, so its table can also be called directly. `VCALL(s, area)` is `(s.vt->area)(s.self)`. Write the parentheses when calling a table yourself, because without them a method-name macro like `area(T)` captures the call. `VTABLE(IShape, Circle)` is the table's address, a constant, so an interface value can also be initialized directly, even statically: `{ &c, VTABLE(IShape, Circle) }`.
+
+`IMPL(IShape, Circle)` checks each of `Circle`'s methods against the interface. A missing method is an undeclared identifier, and a mismatched one fails a static assertion:
 
 ```
-error: static assertion failed: IMPL(Shape, Circle): method scale does not match the interface's signature
+error: static assertion failed: IMPL(IShape, Circle): method scale does not match the interface's signature
 ```
 
-A type can implement any number of interfaces, and an interface added later can be made of methods that already exist: [`samples/shapes.c`](samples/shapes.c) adds a `Sized` interface with `area` alone. A `Dyn` borrows its object, so it must not outlive it.
+A type can implement any number of interfaces, and an interface added later can be made of methods that already exist: [`samples/shapes.c`](samples/shapes.c) adds an `ISized` interface with `area` alone. An interface value borrows its object, so it must not outlive it.
+
+### Generic interfaces
+
+Interfaces can be generic, like C#'s `IComparer<T>`. Name one with a type constructor, and give it a method list that takes the same arguments. `INTERFACE_OF` instantiates it, and `IMPL_OF` implements an instance:
+
+```c
+#include <ctype.h>
+#include <stdbool.h>
+#include <string.h>
+
+typedef const char *Str;
+#define compare(T)  OVERLOAD(compare, T)
+
+#define IComparer(T)  TYPE(IComparer, T)
+#define IComparer_METHODS(T)                                                  \
+    METHOD(compare, int FARGS(const T *, const T *))
+INTERFACE_OF(IComparer, Str);                 /* defines IComparer(Str) */
+
+/* A comparer is an object of its own, so it can carry state. */
+typedef struct { bool ignore_case; } Alphabetical;
+
+int compare(Alphabetical)(const Alphabetical *self, const Str *a,
+                          const Str *b) {
+    if (!self->ignore_case)
+        return strcmp(*a, *b);
+    for (const char *p = *a, *q = *b;; p++, q++) {
+        int d = tolower((unsigned char)*p) - tolower((unsigned char)*q);
+        if (d != 0 || *p == '\0')
+            return d;
+    }
+}
+IMPL_OF(IComparer, (Str), Alphabetical);
+
+/* The comparer is chosen at run time; C checks both operands as Str. */
+int same_name(Str a, Str b, bool ignore_case) {
+    Alphabetical how = { ignore_case };
+    IComparer(Str) by = DYN(IComparer(Str), Alphabetical, &how);
+    return compare(IComparer(Str))(&by, &a, &b) == 0;
+}
+```
+
+Each instance is an ordinary interface, so everything above applies to it. This is how C# passes comparison and equality to generic code, and it covers what other languages do with type-class dictionaries:
+
+- **Strategies are values,** chosen at run time and able to carry state.
+- **A type can have several,** such as both a sum and a product monoid for `int`.
+- **Binary methods take both operands as typed arguments.**
+- **Methods that need no value,** like a monoid's `empty`, are ordinary methods of the strategy object.
+
+Instantiated at an erased type, such as `IComparer(Any)` with `typedef void Any`, the same interface also serves code that is compiled once for values whose type is known only at run time. [`samples/comparers.c`](samples/comparers.c) shows both uses.
+
+A type implements a given generic interface at only one instantiation, since its methods are named for the type alone. A generic implementing type, such as `Reverse(T)` in that sample, implements it once for each of its own instances.
+
+### Separate and reusable translation units
+
+`IMPL` defines the method table and its adapters in the file where it appears, private to that file. That suits a program in one file. When a program is built from separate translation units, or a library is compiled once and reused, a private copy in every file that uses the table bloats the code. Split it instead:
+
+```c
+/* circle.h, included by every file that uses Circle as an IShape */
+IMPL_DECLARE(IShape, Circle);   /* declares the table; defines the constructor DYN uses */
+
+/* circle.c, compiled once */
+IMPL_DEFINE(IShape, Circle);    /* checks Circle's methods and defines the table */
+```
+
+The program then has one table for `IShape` and `Circle`, at one address, shared by every file. Files that include only the declaration can use `DYN` and the dispatchers without seeing `Circle`'s methods, so the methods can even be `static` in `circle.c`. `IMPL` is the same pair in one file, with the table kept private to it. That means it can be repeated in several files, while `IMPL_DEFINE` must appear exactly once. Use one form or the other for a given interface and type. For a generic interface, `IMPL_OF_DEFINE(IComparer, (Str), Alphabetical)` defines the table, and `IMPL_DECLARE(IComparer(Str), Alphabetical)` declares it as it does for any other interface. `fn.h`'s `DELEGATE` splits the same way, into `DELEGATE_DECLARE` and `DELEGATE_DEFINE`.
+
+### Pitfalls
+
+**Coherence.** A comparer is a value apart from the type it compares, so nothing ties a collection to the comparer it was built with. Merging two sets sorted by different comparers, or searching one with another, is a logic error the types don't catch. Type classes avoid this by allowing one instance per type. ML's functors and C#'s comparers share the problem. Both remedies are available, so choose per container:
+
+- **Static: make the comparer's type part of the container's type,** as C++'s `std::set<T, Compare>` does. `SortedSet(int, Ascending)` and `SortedSet(int, Reverse(int))` are then different C types, so mixing them doesn't compile, and calls through a concrete comparer are direct.
+- **Dynamic: check at run time.** With a comparer chosen at run time, `SortedSet(int, IComparer(int))`, check that both operands hold the same comparer before a binary operation, by comparing their `vt` and `self`.
+
+**Borrowed strategies.** An interface value borrows its object. A strategy built on a stack frame must not be used after that frame returns. That includes the strategy for `Vec T` built at each level of a polymorphic recursion, which holds the strategy for `T`. If values that need such a strategy outlive the frame, store the strategy with them, or somewhere else that lasts as long.
+
+**Binary methods across separate values.** Comparing elements of one collection is sound, because they all go through one comparer. Two values that each carry their own comparer or interface value may hide different types, so check that they share one before a binary operation.
+
+**Phantom types.** Typed instances keep phantom types distinct: `IComparer(Id(User))` takes `const Id(User) *`, and `IComparer(Id(Order))` is a different type altogether. Passing a pointer of the wrong type is only a warning in Clang, so compile with `-Werror=incompatible-pointer-types`. Erased instances, such as `IComparer(Any)`, erase phantom types along with every other type.
+
+**Identity.** Don't use function addresses to tell types or strategies apart. Identical-code folding, such as MSVC's `/OPT:ICF`, merges byte-identical adapters, and phantom instances produce exactly those. Table addresses are unique per program only with `IMPL_DECLARE`/`IMPL_DEFINE`, and a linker could in principle fold identical read-only tables too.
+
+**Null receivers.** A stateless strategy can be an incomplete type made with a null pointer, as in `DYN(IComparer(int), Ascending, NULL)`. That's safe only while its methods never touch `self`, and nothing checks it.
 
 ## fn.h: closures
 
@@ -281,11 +366,23 @@ int main(void) {
 ```
 
 - `FN_DEFINE(R FARGS(A1, ..., An))` defines the closure type, a struct of `void *self` and `R (*code)(void *self, A1, ..., An)`, along with its `apply` method. Write it once per signature in each translation unit that needs the definition. Every definition of a signature is identical, so translation units agree. `FN_DECLARE` only declares the type and can be repeated, so headers can name closure types in their declarations.
-- `DELEGATE(T, METHOD(...), ...)` makes methods of `T` usable as closure code, checking each against its signature as `IMPL` does. An interface's method list can be passed as is: `DELEGATE(Circle, Shape_METHODS)`.
+- `DELEGATE(T, METHOD(...), ...)` makes methods of `T` usable as closure code, checking each against its signature as `IMPL` does. An interface's method list can be passed as is: `DELEGATE(Circle, IShape_METHODS)`.
 - `FN(T, name, p)` is the closure of method `name` over `p`, a `T *`.
 - `CALL(f, args...)` calls `f` and evaluates it twice, so pass a variable. `apply(Fn(...))(&f, args...)` is the same call written as a method, so generic code written against `apply(T)` takes either a concrete type or any closure with the same signature.
 
 A `Fn` borrows its environment, so it must not outlive it. To return a closure, return the environment struct and make the closure with `FN` where it's used, or allocate the environment, as [`samples/tagless.c`](samples/tagless.c) does.
+
+`DELEGATE` defines its adapters in the file where it appears, private to that file, like `IMPL`'s table. For separate compilation, to reduce code bloat, split it the same way. That gives one adapter per method for the whole program, instead of a copy in every file that makes closures from the method:
+
+```c
+/* weighted.h, included by every file that makes closures from Weighted */
+DELEGATE_DECLARE(Weighted, METHOD(apply, Dbl FARGS(Dbl, Dbl)));   /* declares the adapter; defines FN's constructor */
+
+/* weighted.c, compiled once */
+DELEGATE_DEFINE(Weighted, METHOD(apply, Dbl FARGS(Dbl, Dbl)));    /* checks the method and defines the adapter */
+```
+
+Files that include only the declaration can use `FN` without seeing the method. Use one form or the other for a given type and method.
 
 Types are named by how they're spelled, so give a closure type a short name with a macro, `#define DblFn Fn(Dbl FARGS(Dbl))`, not a typedef. After a typedef, `apply(DblFn)` would look for a method of a type named `DblFn`.
 
@@ -298,8 +395,12 @@ gcc -std=c11 -Wall -Wextra -pedantic -I . samples/tagless.c -o tagless
 cl /std:c11 /utf-8 /Zc:preprocessor /I . samples\tagless.c
 ```
 
-- [`samples/shapes.c`](samples/shapes.c) uses `dyn.h`. It implements a `Shape` interface for `Circle` and `Rect`, and instantiates a generic `describe` for `Circle` and for `Dyn(Shape)`. It then adds a second interface, `Sized`, made of a method that already exists.
+- [`samples/shapes.c`](samples/shapes.c) uses `dyn.h`. It implements an `IShape` interface for `Circle` and `Rect`, and instantiates a generic `describe` for `Circle` and for `IShape`. It then adds a second interface, `ISized`, made of a method that already exists, and calls it through its table directly.
 - [`samples/closures.c`](samples/closures.c) uses `fn.h`. It covers closures over a struct of weights, partial application by capturing another closure, mutable state in a counter, and a circle's `area` method used as a closure. Its `sum_over` is generic over `apply(T)` and is instantiated for both a concrete type and closures.
+- [`samples/owned.h`](samples/owned.h) and [`samples/owned.c`](samples/owned.c) show what can be built on `dyn.h` without changing it. `owned.h` defines an `IOwned` interface (size, alignment and drop) that any interface can lead to with one method. Code holding an interface value can then move the object into storage of its choosing and drop it later, without knowing its type. In `owned.c`, a region written once against `IOwned` owns objects from two unrelated interfaces.
+- [`samples/comparers.c`](samples/comparers.c) uses generic interfaces in C# style: `IComparer(T)`, `IShow(T)` and `IMonoid(T)`.
+  - **Typed use.** Comparers are values chosen at run time, can carry state, and compose: `Reverse(T)` holds another comparer. `int` has two monoids, `Sum` and `Product`, whose `empty` needs no value.
+  - **Erased use.** The same interfaces, instantiated at `Any`, sort and print columns whose element types come from a schema at run time, with one compiled `sort_column` for every type.
 - [`samples/tagless.c`](samples/tagless.c) uses both, for a tagless-final interpreter of the simply typed lambda calculus with integers, after Carette, Kiselyov and Shan's *Finally Tagless, Partially Evaluated*. The language is an interface, and an evaluator and a pretty-printer implement it. Each term is a C function, compiled once and run by both. Lambdas take their bodies as closures (higher-order abstract syntax). Object-language types are C types, so an ill-typed term doesn't compile. C has no generic methods, so `lam` and `app` get a method for each function type the program uses.
 
   ```
@@ -322,15 +423,17 @@ Both are Unicode letters, so mangled names are ordinary C identifiers. Neither a
 
 | Written | Generates |
 |---|---|
-| `INTERFACE(Shape)` | `DynǀShapeǀ`, `VtableǀShapeǀ`, and a dispatcher per method, such as `areaǀDynǀShapeǀǀ` |
-| `IMPL(Shape, Circle)` | the table `vtableǀShapeꞏCircleǀ`, its entries such as `areaǀShapeꞏCircleǀ`, and `dynǀShapeꞏCircleǀ`, which `DYN` calls |
+| `INTERFACE(IShape)` | the type `IShape`, its table type `VtableǀIShapeǀ`, and a dispatcher per method, such as `areaǀIShapeǀ` |
+| `INTERFACE_OF(IComparer, Str)` | the type `IComparerǀStrǀ`, and dispatchers such as `compareǀIComparerǀStrǀǀ` |
+| `IMPL(IShape, Circle)`, or the split pair | the table `vtableǀIShapeꞏCircleǀ`, its entries such as `areaǀIShapeꞏCircleǀ`, and `dynǀIShapeꞏCircleǀ`, which `DYN` calls |
 | `Fn(Dbl FARGS(Dbl, Dbl))` | `FnǀDblꞏDblꞏDblǀ`: the result type, then the parameters |
-| `DELEGATE(Weighted, METHOD(apply, ...))` | the adapter `lambdaǀapplyꞏWeightedǀ`, and `fnǀapplyꞏWeightedǀ`, which `FN` calls |
+| `DELEGATE(Weighted, METHOD(apply, ...))`, or the split pair | the adapter `lambdaǀapplyꞏWeightedǀ`, and `fnǀapplyꞏWeightedǀ`, which `FN` calls |
 
 ## Requirements
 
 - C11, with UTF-8 source files. Nothing newer is needed, and later standards also work.
 - A compiler that accepts UTF-8 identifiers. With GCC that means version 10 or later. MSVC needs `/utf-8`, the conforming preprocessor `/Zc:preprocessor`, and its C11 mode `/std:c11`, which was added in Visual Studio 2019 16.8.
+- Recommended flags: `-Werror=implicit-function-declaration`, which catches a missing method instance, and `-Werror=incompatible-pointer-types`, which catches mixed phantom types. GCC 14 makes both errors by default.
 
 Tested with:
 
@@ -345,7 +448,8 @@ Tested with:
 - **Instantiate each type once per translation unit.** Including an implementation twice for the same parameters redefines its types. Non-`static` functions must be instantiated once per program, so split those implementations into a declarations header and a definitions file compiled once.
 - **Interfaces hold up to 16 methods, each with up to 7 parameters.** Closures also take up to 7 parameters, and `DELEGATE` accepts up to 16 methods.
 - **Interfaces can't have generic methods.** A table slot has one signature, so a method that is generic in its types needs a slot for each instantiation, as `lam` and `app` have in `samples/tagless.c`.
-- **`Dyn` and `Fn` values borrow** the object or environment they're made from.
+- **A type implements a generic interface at only one instantiation,** since its methods are named for the type alone. Use a generic implementing type for more.
+- **Interface values and `Fn` values borrow** the object or environment they're made from.
 - **Name closure types with macros, not typedefs**, as described under [fn.h](#fnh-closures).
 - **Locale.** GCC prints these names as-is only under a UTF-8 locale. Under `LANG=C` it prints escapes like `\U000001c0`, so set `LANG=C.UTF-8` in CI.
 - **Fonts and editors.** Most coding fonts don't include `ǀ` or `ꞏ`, so editors draw them from a fallback font. VS Code highlights `ǀ` as ambiguous because it resembles `I`. To turn that off, add it to your settings:
@@ -372,10 +476,16 @@ Define `MONOMORPH_NO_SHORT_NAMES` before including `monomorph.h` to leave out `T
 | Macro | Meaning |
 |---|---|
 | `METHOD(name, R FARGS(A1, ..., An))` | a method signature, not counting `self`, for `INTERFACE` and `DELEGATE` |
-| `INTERFACE(I)` | defines `Dyn(I)`, `Vtable(I)`, and a dispatching `name(Dyn(I))` for each method listed in `I_METHODS` |
-| `IMPL(I, T)` | implements `I` for `T`: checks `T`'s methods and defines its method table |
-| `DYN(I, T, p)` | the `Dyn(I)` of `p`, a `T *` |
-| `Dyn(I)`, `Vtable(I)` | the interface's value and method-table types |
+| `INTERFACE(I)` | defines the interface type `I`, its table type `Vtable(I)`, and a dispatching `name(I)` for each method listed in `I_METHODS` |
+| `INTERFACE_OF(G, A1, ...)` | the same for generic interface `G` at `A1, ...`, named `G(A1, ...)`, with methods `G_METHODS(A1, ...)` |
+| `IMPL(I, T)` | implements `I` for `T` in this file: checks `T`'s methods and defines its method table, private to the file |
+| `IMPL_DECLARE(I, T)` | in a header: declares the method table and defines the constructor `DYN` uses |
+| `IMPL_DEFINE(I, T)` | in one source file: checks `T`'s methods and defines the table the declaration names |
+| `IMPL_OF(G, (A1, ...), T)`, `IMPL_OF_DEFINE(G, (A1, ...), T)` | `IMPL` and `IMPL_DEFINE` for an instance of a generic interface |
+| `DYN(I, T, p)` | the `I` holding `p`, a `T *` |
+| `VCALL(i, name, args...)` | calls method `name` through interface value `i`'s table, evaluating `i` twice |
+| `VTABLE(I, T)` | the address of `T`'s table for `I`, a constant |
+| `Vtable(I)` | the interface's method-table type |
 
 ### fn.h
 
@@ -384,6 +494,8 @@ Define `MONOMORPH_NO_SHORT_NAMES` before including `monomorph.h` to leave out `T
 | `Fn(R FARGS(A1, ..., An))` | the closure type |
 | `FN_DECLARE(R FARGS(...))` | declares it; may be repeated |
 | `FN_DEFINE(R FARGS(...))` | defines it and its `apply` method, once per translation unit |
-| `DELEGATE(T, METHOD(...), ...)` | makes `T`'s methods usable as closures |
+| `DELEGATE(T, METHOD(...), ...)` | makes `T`'s methods usable as closures, with adapters private to this file |
+| `DELEGATE_DECLARE(T, METHOD(...), ...)` | in a header: declares the adapters and defines the constructors `FN` uses |
+| `DELEGATE_DEFINE(T, METHOD(...), ...)` | in one source file: checks `T`'s methods and defines the adapters |
 | `FN(T, name, p)` | the closure of method `name` over `p`, a `T *` |
 | `CALL(f, args...)` | calls `f`, evaluating it twice |

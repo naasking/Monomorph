@@ -103,7 +103,7 @@
  *
  *   Makes each listed method OVERLOAD(name, T) usable as the code of a
  *   Fn(R FARGS(A1, ..., An)), defined by FN_DEFINE. An interface's method
- *   list can be passed as is: DELEGATE(Circle, Shape_METHODS). For each
+ *   list can be passed as is: DELEGATE(Circle, IShape_METHODS). For each
  *   method, generates in this translation unit:
  *
  *     static R lambdaǀnameꞏTǀ(void *self, A1, ..., An)     the adapter
@@ -114,30 +114,65 @@
  *   error. Up to 16 methods, each with up to 7 parameters.
  *
  * FN(T, name, p)   the closure of method `name` over p, a `T *`.
+ *
+ * DELEGATE_DECLARE(T, METHOD(...), ...);   in a header: declares the
+ *                                          adapters and defines the
+ *                                          constructors FN uses
+ * DELEGATE_DEFINE(T, METHOD(...), ...);    in one source file: checks the
+ *                                          methods and defines the adapters
+ *
+ *   The same, split for separate compilation, to reduce code bloat:
+ *   DELEGATE puts a private copy of each adapter in every file that uses
+ *   it, where the split defines each once per program. Files using the
+ *   declaration need neither the methods nor DELEGATE. Use one form or the
+ *   other for a given type and method.
  */
 #define DELEGATE(T, ...)                                                      \
-    DYN_EACH(FN_DELEGATE_, ~, T, __VA_ARGS__)                                 \
+    DYN_EACH(FN_ADAPTER_, static, T, __VA_ARGS__)                             \
+    DYN_EACH(FN_CONSTRUCTOR_, ~, T, __VA_ARGS__)                              \
     _Static_assert(1, "DELEGATE")
-#define FN_DELEGATE_(I, T, m)  DYN_WITH_SIG(FN_DELEGATE_GEN, I, T, m)
-#define FN_DELEGATE_GEN(I, T, R, name, TYPES, DECLS, PASS)                    \
+
+#define DELEGATE_DECLARE(T, ...)                                              \
+    DYN_EACH(FN_PROTOTYPE_, ~, T, __VA_ARGS__)                                \
+    DYN_EACH(FN_CONSTRUCTOR_, ~, T, __VA_ARGS__)                              \
+    _Static_assert(1, "DELEGATE_DECLARE")
+
+#define DELEGATE_DEFINE(T, ...)                                               \
+    DYN_EACH(FN_ADAPTER_, , T, __VA_ARGS__)                                   \
+    _Static_assert(1, "DELEGATE_DEFINE")
+
+#define FN(T, name, p)  MONOMORPH_MANGLE(fn, name, T)(p)
+
+/* The generators, for each method. The adapter's linkage, static or none,
+   travels in DYN_WITH_SIG's interface slot, which closures don't use. */
+#define FN_ADAPTER_(L, T, m)      DYN_WITH_SIG(FN_ADAPTER_GEN, L, T, m)
+#define FN_PROTOTYPE_(I, T, m)    DYN_WITH_SIG(FN_PROTOTYPE_GEN, I, T, m)
+#define FN_CONSTRUCTOR_(I, T, m)  DYN_WITH_SIG(FN_CONSTRUCTOR_GEN, I, T, m)
+
+/* The check and the adapter. */
+#define FN_ADAPTER_GEN(L, T, R, name, TYPES, DECLS, PASS)                     \
     _Static_assert(_Generic(&MONOMORPH_OVERLOAD(name, T),                     \
                        R (*)(const T * DYN_UNPAREN TYPES): 1,                 \
                        R (*)(T * DYN_UNPAREN TYPES): 1,                       \
                        default: 0),                                           \
                    "DELEGATE(" #T "): method " #name                          \
                    " does not match its signature");                          \
-    static R MONOMORPH_MANGLE(lambda, name, T)(void *self                     \
-                                               DYN_UNPAREN DECLS) {           \
+    L R MONOMORPH_MANGLE(lambda, name, T)(void *self DYN_UNPAREN DECLS) {     \
         DYN_RETURN(R)                                                         \
             MONOMORPH_OVERLOAD(name, T)((T *)self DYN_UNPAREN PASS);          \
-    }                                                                         \
+    }
+
+/* The adapter's declaration. */
+#define FN_PROTOTYPE_GEN(I, T, R, name, TYPES, DECLS, PASS)                   \
+    R MONOMORPH_MANGLE(lambda, name, T)(void *self DYN_UNPAREN TYPES);
+
+/* The constructor FN calls, which needs the adapter declared. */
+#define FN_CONSTRUCTOR_GEN(I, T, R, name, TYPES, DECLS, PASS)                 \
     DYN_MAYBE_UNUSED                                                          \
     static inline FN_NAME_(R, TYPES) MONOMORPH_MANGLE(fn, name, T)(T *self) { \
         return (FN_NAME_(R, TYPES)){ self,                                    \
                                      MONOMORPH_MANGLE(lambda, name, T) };     \
     }
-
-#define FN(T, name, p)  MONOMORPH_MANGLE(fn, name, T)(p)
 
 
 /* -------------------------------------------------------------------------- */

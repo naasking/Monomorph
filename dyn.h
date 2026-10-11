@@ -1,10 +1,12 @@
 /*
  * dyn.h
  *
- * Interfaces with dynamic dispatch through two-pointer values, an object
- * pointer plus a method table, in the style of Rust's `dyn Trait`. Types
- * stay plain structs, and any translation unit can implement any interface
- * for any type.
+ * Interfaces with dynamic dispatch, in the style of C#'s interface types
+ * and Rust's `dyn Trait`. An interface is a type: INTERFACE(IShape) defines
+ * IShape, a two-pointer value holding any object that implements it, an
+ * object pointer plus its type's method table. Name interfaces as C# does,
+ * with an I prefix. Types stay plain structs, and any translation unit can
+ * implement any interface for any type.
  *
  * Methods are ordinary overloads: a function named OVERLOAD(name, T) whose
  * first parameter is a `const T *` or `T *`.
@@ -12,18 +14,21 @@
  *   #define area(T)   OVERLOAD(area, T)
  *   #define scale(T)  OVERLOAD(scale, T)
  *
- *   #define Shape_METHODS                                                    \
+ *   #define IShape_METHODS                                                   \
  *       METHOD(area,  Dbl  FARGS()),                                         \
  *       METHOD(scale, void FARGS(Dbl))
- *   INTERFACE(Shape);                       declares Dyn(Shape)
+ *   INTERFACE(IShape);                      defines the type IShape
  *
  *   Dbl area(Circle)(const Circle *self) { return PI * self->r * self->r; }
  *   void scale(Circle)(Circle *self, Dbl k) { self->r *= k; }
- *   IMPL(Shape, Circle);                    implements Shape for Circle
+ *   IMPL(IShape, Circle);                   implements IShape for Circle
  *
- *   Dyn(Shape) s = DYN(Shape, Circle, &c);
- *   area(Dyn(Shape))(&s);                   dispatching call
+ *   IShape s = DYN(IShape, Circle, &c);
+ *   area(IShape)(&s);                       dispatching call
+ *   VCALL(s, area);                         the same, through the table
  *   area(Circle)(&c);                       statically bound call
+ *
+ * Interfaces can be generic, like C#'s IComparer<T>: see INTERFACE_OF.
  *
  * Generated code never writes `name(`, so method-name macros like the ones
  * above don't interfere with it. It also uses only the prefixed
@@ -35,8 +40,7 @@
 
 #include "monomorph.h"
 
-#define Dyn(I)     MONOMORPH_TYPE(Dyn, I)     /* object + method table */
-#define Vtable(I)  MONOMORPH_TYPE(Vtable, I)  /* the method table type */
+#define Vtable(I)  MONOMORPH_TYPE(Vtable, I)  /* an interface's method table */
 
 
 /* -------------------------------------------------------------------------- */
@@ -86,21 +90,49 @@
 /*
  * INTERFACE(I);   with I##_METHODS defined as a list of METHODs.
  *
- * Defines Vtable(I), Dyn(I), and one dispatching function per method,
+ * Defines the interface type I, a value of which holds an object and its
+ * type's method table,
  *
- *   R OVERLOAD(name, Dyn(I))(const Dyn(I) *d, A1, ..., An)
+ *   struct I { void *self; const Vtable(I) *vt; };
+ *
+ * and one dispatching function per method,
+ *
+ *   R OVERLOAD(name, I)(const I *i, A1, ..., An)
  *
  * which calls the implementation the method table points to. Dispatching
  * functions take a pointer, like the methods themselves, so generic code
- * written against name(T) works for T = Circle and T = Dyn(Shape) alike.
- * Up to 16 methods, each with up to 7 parameters.
+ * written against name(T) works for T = Circle and T = IShape alike. The
+ * table can also be called directly: see VCALL. Up to 16 methods, each with
+ * up to 7 parameters.
+ *
+ * Name interfaces as C# does, with an I prefix: IShape, IComparer. The name
+ * becomes the type, so it can't also name another type.
+ *
+ * INTERFACE_OF(G, A1, ..., An);   with G##_METHODS(A1, ..., An) defined
+ *
+ *   A generic interface G instantiated at A1, ..., An, as C#'s IComparer<T>
+ *   is: an ordinary interface named G(A1, ..., An), whose method list
+ *   depends on its arguments. Name it with a type-constructor macro.
+ *
+ *     #define IComparer(T)  TYPE(IComparer, T)
+ *     #define IComparer_METHODS(T)                                           \
+ *         METHOD(compare, int FARGS(const T *, const T *))
+ *     INTERFACE_OF(IComparer, Str);       defines IComparer(Str)
+ *
+ *   Instantiate each once per translation unit.
  */
-#define INTERFACE(I)                                                          \
+#define INTERFACE(I)  DYN_INTERFACE_(I, I##_METHODS)
+
+#define INTERFACE_OF(G, ...)                                                  \
+    DYN_INTERFACE_(MONOMORPH_TYPE(G, __VA_ARGS__), G##_METHODS(__VA_ARGS__))
+
+/* The interface type I, its table type and dispatchers, from its methods. */
+#define DYN_INTERFACE_(I, ...)                                                \
     typedef struct Vtable(I) Vtable(I);                                       \
-    typedef struct Dyn(I) { void *self; const Vtable(I) *vt; } Dyn(I);        \
-    struct Vtable(I) { DYN_EACH(DYN_SLOT, I, ~, I##_METHODS) };               \
-    DYN_EACH(DYN_DISPATCH, I, ~, I##_METHODS)                                 \
-    typedef struct Dyn(I) Dyn(I)
+    typedef struct I { void *self; const Vtable(I) *vt; } I;                  \
+    struct Vtable(I) { DYN_EACH(DYN_SLOT, I, ~, __VA_ARGS__) };               \
+    DYN_EACH(DYN_DISPATCH, I, ~, __VA_ARGS__)                                 \
+    typedef struct I I
 
 
 /* -------------------------------------------------------------------------- */
@@ -113,23 +145,96 @@
  * Requires an overload OVERLOAD(name, T) for every method I lists, taking
  * `const T *` or `T *` and then the listed parameters, with the listed
  * result; a missing or mismatched method is a compile error. Generates a
- * static method table and the constructor used by DYN.
+ * method table, private to this translation unit, and the constructor used
+ * by DYN.
  *
- * DYN(I, T, p)   makes a Dyn(I) from p, a `T *`.
+ * DYN(I, T, p)   makes an I from p, a `T *`.
+ *
+ * IMPL_DECLARE(I, T);   in a header: declares the table and defines the
+ *                       constructor, so any file including it can use DYN
+ * IMPL_DEFINE(I, T);    in one source file: checks the methods and defines
+ *                       the table
+ *
+ *   The same, split for separate compilation, to reduce code bloat: a
+ *   program has one table for I and T, at one address, instead of a
+ *   private copy in every file that uses it. Files using the declaration
+ *   need neither the methods nor IMPL. IMPL is the two in one file with
+ *   the table kept private, so it can be repeated in several files, as the
+ *   split can't. Use one form or the other for a given I and T.
+ *
+ * IMPL_OF(G, (A1, ..., An), T);          the same for a generic interface,
+ * IMPL_OF_DEFINE(G, (A1, ..., An), T);   whose methods depend on A1, ..., An
+ *
+ *   IMPL_DECLARE(G(A1, ..., An), T) and DYN(G(A1, ..., An), T, p) serve
+ *   generic interfaces as they are. A type implements a generic interface
+ *   at one instantiation, since its methods are named for the type alone;
+ *   a generic type, like Reverse(T), implements it once per instance.
  */
 #define IMPL(I, T)                                                            \
-    DYN_EACH(DYN_CHECK, I, T, I##_METHODS)                                    \
-    DYN_EACH(DYN_THUNK, I, T, I##_METHODS)                                    \
-    static const Vtable(I) MONOMORPH_MANGLE(vtable, I, T) = {                 \
-        DYN_EACH(DYN_INIT, I, T, I##_METHODS)                                 \
-    };                                                                        \
-    DYN_MAYBE_UNUSED                                                          \
-    static inline Dyn(I) MONOMORPH_MANGLE(dyn, I, T)(T *self) {               \
-        return (Dyn(I)){ self, &MONOMORPH_MANGLE(vtable, I, T) };             \
-    }                                                                         \
-    typedef struct Dyn(I) Dyn(I)
+    DYN_IMPL_TABLE_(static, I, T, I##_METHODS);                               \
+    DYN_IMPL_CONSTRUCTOR_(I, T)
+
+#define IMPL_DECLARE(I, T)                                                    \
+    extern const Vtable(I) MONOMORPH_MANGLE(vtable, I, T);                    \
+    DYN_IMPL_CONSTRUCTOR_(I, T)
+
+#define IMPL_DEFINE(I, T)                                                     \
+    DYN_IMPL_TABLE_(, I, T, I##_METHODS);                                     \
+    typedef struct I I
+
+#define IMPL_OF(G, ARGS, T)                                                   \
+    DYN_IMPL_TABLE_(static, DYN_GENERIC_(G, ARGS), T, G##_METHODS ARGS);      \
+    DYN_IMPL_CONSTRUCTOR_(DYN_GENERIC_(G, ARGS), T)
+
+#define IMPL_OF_DEFINE(G, ARGS, T)                                            \
+    DYN_IMPL_TABLE_(, DYN_GENERIC_(G, ARGS), T, G##_METHODS ARGS);            \
+    typedef struct DYN_GENERIC_(G, ARGS) DYN_GENERIC_(G, ARGS)
 
 #define DYN(I, T, p)  MONOMORPH_MANGLE(dyn, I, T)(p)
+
+/* G(A1, ..., An), from G and (A1, ..., An). */
+#define DYN_GENERIC_(G, ARGS)  MONOMORPH_TYPE(G, DYN_UNPAREN ARGS)
+
+/* The checks, adapters and table, with the table's linkage. */
+#define DYN_IMPL_TABLE_(linkage, I, T, ...)                                   \
+    DYN_EACH(DYN_CHECK, I, T, __VA_ARGS__)                                    \
+    DYN_EACH(DYN_THUNK, I, T, __VA_ARGS__)                                    \
+    linkage const Vtable(I) MONOMORPH_MANGLE(vtable, I, T) = {                \
+        DYN_EACH(DYN_INIT, I, T, __VA_ARGS__)                                 \
+    }
+
+/* The constructor DYN calls, which needs the table declared. */
+#define DYN_IMPL_CONSTRUCTOR_(I, T)                                           \
+    DYN_MAYBE_UNUSED                                                          \
+    static inline I MONOMORPH_MANGLE(dyn, I, T)(T *self) {                    \
+        return (I){ self, &MONOMORPH_MANGLE(vtable, I, T) };                  \
+    }                                                                         \
+    typedef struct I I
+
+
+/* -------------------------------------------------------------------------- */
+/* Calling through the table                                                  */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * VCALL(i, name, args...)   calls method name through interface value i's
+ * VCALL(i, name)            table, as (i.vt->name)(i.self, args...). The
+ *                           parentheses keep method-name macros like
+ *                           area(T) from capturing the call, so write them
+ *                           when calling a table without VCALL. i is
+ *                           evaluated twice, so pass a variable.
+ *
+ * VTABLE(I, T)              the address of T's table for I, a constant, so
+ *                           an interface value can also be initialized
+ *                           directly, even statically:
+ *                           { &c, VTABLE(IShape, Circle) }
+ */
+#define VCALL(...)                                                            \
+    MONOMORPH_CAT(DYN_VCALL_, DYN_HAS_PARAMS(__VA_ARGS__))(__VA_ARGS__)
+#define DYN_VCALL_0(i, name)       (((i).vt->name)((i).self))
+#define DYN_VCALL_1(i, name, ...)  (((i).vt->name)((i).self, __VA_ARGS__))
+
+#define VTABLE(I, T)  (&MONOMORPH_MANGLE(vtable, I, T))
 
 
 /* -------------------------------------------------------------------------- */
@@ -143,9 +248,9 @@
 
 #define DYN_DISPATCH_GEN(I, T, R, name, TYPES, DECLS, PASS)                   \
     DYN_MAYBE_UNUSED                                                          \
-    static inline R MONOMORPH_OVERLOAD(name, Dyn(I))(                         \
-            const Dyn(I) *dyn_ DYN_UNPAREN DECLS) {                           \
-        DYN_RETURN(R) (dyn_->vt->name)(dyn_->self DYN_UNPAREN PASS);          \
+    static inline R MONOMORPH_OVERLOAD(name, I)(                              \
+            const I *iface_ DYN_UNPAREN DECLS) {                              \
+        DYN_RETURN(R) (iface_->vt->name)(iface_->self DYN_UNPAREN PASS);      \
     }
 
 #define DYN_CHECK_GEN(I, T, R, name, TYPES, DECLS, PASS)                      \
@@ -432,7 +537,8 @@
 #define DYN_NARG_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, \
                   _15, _16, _17, _18, _19, _20, _21, _22, _23, _24, N, ...)  N
 
-/* 0 for (~, f), 1 for (~, f, args...); used by DYN_NO_ARGS and fn.h's CALL. */
+/* 0 for (~, f), 1 for (~, f, args...); used by DYN_NO_ARGS, VCALL and fn.h's
+   CALL. */
 #define DYN_HAS_PARAMS(...)                                                   \
     MONOMORPH_CAT(DYN_HAS_PARAMS_, DYN_NARG(__VA_ARGS__))
 #define DYN_HAS_PARAMS_2   0
